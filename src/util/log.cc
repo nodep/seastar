@@ -61,6 +61,8 @@ module seastar;
 #include "core/program_options.hh"
 #endif
 
+#include "dbg.cc"
+
 using namespace std::chrono_literals;
 
 struct wrapped_log_level {

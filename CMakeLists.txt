@@ -754,6 +754,7 @@ add_library (seastar
   src/util/exceptions.cc
   src/util/file.cc
   src/util/log.cc
+  src/util/log_tracer.cc
   src/util/process.cc
   src/util/program-options.cc
   src/util/read_first_line.cc

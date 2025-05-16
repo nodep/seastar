@@ -26,6 +26,7 @@
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/util/std-compat.hh>
 #include <seastar/util/modules.hh>
+#include <seastar/util/log_tracer.hh>
 
 #ifndef SEASTAR_MODULE
 #include <concepts>
@@ -283,6 +284,9 @@ public:
     ///
     template <typename... Args>
     void log(log_level level, format_info_t<Args...> fmt, Args&&... args) noexcept {
+        if (level <= log_level::debug) {
+            log_trace_p->write_log(fmt.format.get().data(), args...);
+        }
         if (is_enabled(level)) {
             try {
                 lambda_log_writer writer([&] (internal::log_buf::inserter_iterator it) {
@@ -584,5 +588,7 @@ template <> struct fmt::formatter<std::exception_ptr> : fmt::ostream_formatter {
 template <> struct fmt::formatter<std::exception> : fmt::ostream_formatter {};
 template <> struct fmt::formatter<std::system_error> : fmt::ostream_formatter {};
 #endif
+
+//#include <seastar/util/dbg.hh>
 
 /// @}

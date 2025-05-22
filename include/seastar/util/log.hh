@@ -47,6 +47,8 @@ namespace seastar {
 
 SEASTAR_MODULE_EXPORT_BEGIN
 
+extern __thread log_trace* local_tracer;
+
 /// \brief log level used with \see {logger}
 /// used with the logger.do_log method.
 /// Levels are in increasing order. That is if you want to see debug(3) logs you
@@ -284,8 +286,8 @@ public:
     ///
     template <typename... Args>
     void log(log_level level, format_info_t<Args...> fmt, Args&&... args) noexcept {
-        if (level <= log_level::debug) {
-            log_trace_p->write_log(fmt.format.get().data(), args...);
+        if (local_tracer) {
+            local_tracer->write_log(fmt.format.get().data(), args...);
         }
         if (is_enabled(level)) {
             try {

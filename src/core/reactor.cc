@@ -3968,7 +3968,9 @@ void smp::allocate_reactor(unsigned id, reactor_backend_selector rbs, reactor_co
     SEASTAR_ASSERT(r == 0);
     *internal::this_shard_id_ptr() = id;
     local_engine = new (buf) reactor(this->shared_from_this(), _alien, id, std::move(rbs), cfg);
+    local_tracer = new log_trace();
     reactor_holder.reset(local_engine);
+
 }
 
 void smp::cleanup() noexcept {
@@ -4771,6 +4773,7 @@ bool smp::pure_poll_queues() {
 }
 
 __thread reactor* local_engine;
+__thread log_trace* local_tracer;
 
 void report_exception(std::string_view message, std::exception_ptr eptr) noexcept {
     seastar_logger.error("{}: {}", message, eptr);

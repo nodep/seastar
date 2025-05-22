@@ -50,6 +50,7 @@ struct log_trace {
 
         uint8_t arg_count = 0;
         size_t entry_count = 0;
+        size_t valid_size = 0;
 
         log_buffer() {
             clear();
@@ -60,6 +61,7 @@ struct log_trace {
             read_i = buffer.begin();
             arg_count = 0;
             entry_count = 0;
+            valid_size = 0;
         }
 
         bool can_write(int bytes) const {
@@ -71,7 +73,7 @@ struct log_trace {
         }
 
         size_t buff_size() const {
-            return write_i - buffer.begin();
+            return valid_size;
         }
 
         size_t count() const {
@@ -88,7 +90,7 @@ struct log_trace {
             const char* end = begin + sizeof(t);
             write_i = std::copy(begin, end, write_i);
         }
-    
+
         template <typename T>
         void push_arg(const T& t, arg_type at) {
             push(at);
@@ -96,7 +98,7 @@ struct log_trace {
             push(uint16_t(sizeof(T)));
             push(t);
         }
-    
+
         template <typename T>
         T get() {
             T t;
@@ -105,7 +107,7 @@ struct log_trace {
             read_i += sizeof(T);
             return t;
         }
-    
+
         std::string getstr(size_t size) {
             std::string s;
             s.reserve(size);
@@ -113,44 +115,51 @@ struct log_trace {
             read_i += size;
             return s;
         }
-    
+
         void save_args() {
             // no args
         }
-    
+
         void save_args(const std::string_view s);
         void save_args(const char* s);
         void save_args(const bool b);
-    
+
         template <std::signed_integral I>
         void save_args(const I& i) {
             push_arg(i, e_int);
             ++arg_count;
         }
-    
+
         template <std::unsigned_integral U>
         void save_args(const U& u) {
-            push_arg(u, e_int);
+            push_arg(u, e_uint);
             ++arg_count;
         }
-    
+
         template <typename T>
         void save_args(const T& t) {
             // ignore arg -- we don't handle this (yet)
             ++arg_count;
         }
-    
-        template <typename T, typename... Args>
-        void save_args(const T& t, Args&... args) {
-            save_args(t);
-            save_args(args...);
+
+        // template <typename T, typename... Args>
+        // void save_args(const T& t, Args&... args) {
+        //     save_args(t);
+        //     save_args(args...);
+        // }
+
+        template <typename... Args>
+        void save_args(Args&... args) {
+            (save_args(args), ...);
         }
 
         void commit_msg() {
             ++entry_count;
+            valid_size = write_i - buffer.begin();
         }
 
-        void flush();
+        void flush(std::ostream& os);
+        void flush_raw(std::ostream& os);
     };
 
     struct ring_buffers {
@@ -167,45 +176,23 @@ struct log_trace {
             write_buff_i->clear();
         }
 
-        void flush() {
-            ring_t::iterator flush_i = write_buff_i;
-            do {
-                ++flush_i;
-                if (flush_i == ring.end()) {
-                    flush_i = ring.begin();
-                }
-
-                flush_i->flush();
-               
-            } while (flush_i != write_buff_i);
-        }
+        void flush();
+        void flush_raw();
 
         log_buffer& active_buff() {
             return *write_buff_i;
         }
     };
 
-    // TODO: get around the problem of dynamic creation and thread safety
-    static constexpr int MAX_SHARDS = 32;
-    std::array<std::unique_ptr<ring_buffers>, MAX_SHARDS> rbuffers;
+    ring_buffers rbuffers;
 
     log_trace() = default;
 
-    ring_buffers& get_buffers_for_this_shard() {
-        const auto shard_id = this_shard_id();
-        if (!rbuffers[shard_id]) {
-            rbuffers[shard_id].reset(new ring_buffers{});
-        }
-
-        return *rbuffers[shard_id];
-    }
-
     template <typename... Args>
     void write_log(const std::string_view& format, const Args&... args) {
-        ring_buffers& rb = get_buffers_for_this_shard();
-        while (true) {
+         while (true) {
             try {
-                log_buffer& b = rb.active_buff();
+                log_buffer& b = rbuffers.active_buff();
                 b.arg_count = 0;
                 b.push(std::chrono::system_clock::now());
                 b.push(format.data());    // we're betting on this being a null terminated string :)
@@ -217,19 +204,15 @@ struct log_trace {
 
                 break;
             } catch (buffer_full& e) {
-                rb.rotate();
+                rbuffers.rotate();
             }
         }
     }
 
-    void flush() {
-        for (auto& rb: rbuffers) {
-            if (rb)
-                rb->flush();
-        }
-    }
+    void flush();
+    void flush_raw();
 };
 
-extern log_trace* log_trace_p;
+// extern log_trace* log_trace_p;
 
 }

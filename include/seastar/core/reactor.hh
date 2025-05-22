@@ -60,6 +60,7 @@
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/util/std-compat.hh>
 #include "internal/pollable_fd.hh"
+#include <seastar/util/log_tracer.hh>
 
 #ifndef SEASTAR_MODULE
 #include <boost/container/static_vector.hpp>
@@ -706,6 +707,7 @@ public:
 };
 
 extern __thread reactor* local_engine;
+extern __thread log_trace* local_tracer;
 
 SEASTAR_MODULE_EXPORT
 inline reactor& engine() {

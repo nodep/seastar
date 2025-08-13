@@ -95,9 +95,14 @@ public:
         promise_type(promise_type&&) = delete;
         promise_type(const promise_type&) = delete;
 
-        template<typename... U>
-        void return_value(U&&... value) {
-            _promise.set_value(std::forward<U>(value)...);
+        template<typename U>
+        void return_value(U&& value) {
+            _promise.set_value(std::forward<U>(value));
+        }
+
+        [[deprecated("Forwarding coroutine returns are deprecated as too dangerous. Use 'co_return co_await ...' until explicit syntax is available.")]]
+        void return_value(future<T>&& fut) noexcept {
+            fut.forward_to(std::move(_promise));
         }
 
         void return_value(coroutine::exception ce) noexcept {
@@ -106,11 +111,6 @@ public:
 
         void set_exception(std::exception_ptr&& eptr) noexcept {
             _promise.set_exception(std::move(eptr));
-        }
-
-        [[deprecated("Forwarding coroutine returns are deprecated as too dangerous. Use 'co_return co_await ...' until explicit syntax is available.")]]
-        void return_value(future<T>&& fut) noexcept {
-            fut.forward_to(std::move(_promise));
         }
 
         void unhandled_exception() noexcept {

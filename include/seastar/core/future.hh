@@ -273,6 +273,13 @@ struct get0_return_type {
 template<typename T>
 using maybe_wrap_ref = std::conditional_t<std::is_reference_v<T>, std::reference_wrapper<std::remove_reference_t<T>>, T>;
 
+/// Convert U to T using copy-initialization (implicit conversions only).
+/// C++17 mandatory copy elision ensures no extra moves or copies.
+template<typename T, typename U>
+T implicit_convert(U&& u) {
+    return std::forward<U>(u);
+}
+
 /// \brief Wrapper for keeping uninitialized values of non default constructible types.
 ///
 /// This is similar to a std::optional<T>, but it doesn't know if it is holding a value or not, so the user is
@@ -290,16 +297,33 @@ struct uninitialized_wrapper {
 
 public:
     uninitialized_wrapper() noexcept = default;
+    template<typename U>
+    requires std::is_convertible_v<U&&, T>
+    void uninitialized_set(U&& u) {
+        // Despite the `requires` condition above, the line below may still fail compilation if T is a reference type.
+        // E.g. when T is a const lvalue reference and U is an rvalue reference to a non-const type.
+        // These kind of conversions make little sense both here and with plain `return`.
+        new(&_v.value) auto(implicit_convert<maybe_wrap_ref<T>>(std::forward<U>(u)));
+    }
     template<typename... U>
-    requires (!std::same_as<std::tuple<std::remove_cv_t<U>...>, std::tuple<tuple_type>>)
-    void
-    uninitialized_set(U&&... vs) {
+    void uninitialized_emplace(U&&... vs) {
         new (&_v.value) maybe_wrap_ref<T>(T(std::forward<U>(vs)...));
     }
-    void uninitialized_set(tuple_type&& v) {
+    void uninitialized_set_from_tuple(tuple_type&& v) {
+        uninitialized_set_loose_type_conversion(std::move(std::get<0>(v)));
+    }
+    void uninitialized_set_from_tuple(const tuple_type& v) {
+        uninitialized_set_loose_type_conversion(std::get<0>(v));
+    }
+    template<typename... U>
+    requires (!std::same_as<std::tuple<std::remove_cv_t<U>...>, std::tuple<tuple_type>>)
+    void uninitialized_set_loose_type_conversion(U&&... vs) {
+        new (&_v.value) maybe_wrap_ref<T>(T(std::forward<U>(vs)...));
+    }
+    void uninitialized_set_loose_type_conversion(tuple_type&& v) {
         uninitialized_set(std::move(std::get<0>(v)));
     }
-    void uninitialized_set(const tuple_type& v) {
+    void uninitialized_set_legacy(const tuple_type& v) {
         uninitialized_set(std::get<0>(v));
     }
     maybe_wrap_ref<T>& uninitialized_get() {
@@ -315,13 +339,23 @@ struct uninitialized_wrapper<internal::monostate> {
     [[no_unique_address]] internal::monostate _v;
 public:
     uninitialized_wrapper() noexcept = default;
-    void uninitialized_set() {
-    }
     void uninitialized_set(internal::monostate) {
     }
-    void uninitialized_set(std::tuple<>&& v) {
+    void uninitialized_emplace(internal::monostate) {
     }
-    void uninitialized_set(const std::tuple<>& v) {
+    void uninitialized_emplace() {
+    }
+    void uninitialized_set_from_tuple(std::tuple<>&& v) {
+    }
+    void uninitialized_set_from_tuple(const std::tuple<>& v) {
+    }
+    void uninitialized_set_loose_type_conversion() {
+    }
+    void uninitialized_set_loose_type_conversion(internal::monostate) {
+    }
+    void uninitialized_set_loose_type_conversion(std::tuple<>&& v) {
+    }
+    void uninitialized_set_loose_type_conversion(const std::tuple<>& v) {
     }
     internal::monostate& uninitialized_get() {
         return _v;
@@ -556,7 +590,11 @@ inline void future_state_base::any::check_failure() noexcept {
     }
 }
 
-struct ready_future_marker {};
+struct loose_type_conversion_ready_future_marker {};
+struct set_ready_future_marker {};
+struct set_from_tuple_ready_future_marker {};
+struct emplace_ready_future_marker {};
+
 struct exception_future_marker {};
 struct future_for_get_promise_marker {};
 
@@ -612,18 +650,59 @@ struct future_state :  public future_state_base, private internal::uninitialized
         move_it(std::move(x));
         return *this;
     }
-    template <typename... A>
-    future_state(ready_future_marker, A&&... a) noexcept : future_state_base(state::result) {
-      try {
-        this->uninitialized_set(std::forward<A>(a)...);
-      } catch (...) {
-        new (this) future_state(current_exception_future_marker());
-      }
+    template<typename U>
+    requires std::is_convertible_v<U&&, T>
+    future_state(set_ready_future_marker, U&& v) noexcept : future_state_base(state::result) {
+        try {
+            this->uninitialized_set(std::forward<U>(v));
+        } catch (...) {
+            new (this) future_state(current_exception_future_marker());
+        }
+    }
+    template <typename Tup>
+    future_state(set_from_tuple_ready_future_marker, Tup&& v) noexcept : future_state_base(state::result) {
+        try {
+            this->uninitialized_set_from_tuple(std::forward<Tup>(v));
+        } catch (...) {
+            new (this) future_state(current_exception_future_marker());
+        }
     }
     template <typename... A>
-    void set(A&&... a) noexcept {
+    future_state(emplace_ready_future_marker, A&&... a) noexcept : future_state_base(state::result) {
+        try {
+            this->uninitialized_emplace(std::forward<A>(a)...);
+        } catch (...) {
+            new (this) future_state(current_exception_future_marker());
+        }
+    }
+    template <typename... A>
+    future_state(loose_type_conversion_ready_future_marker, A&&... a) noexcept : future_state_base(state::result) {
+        try {
+            this->uninitialized_set_loose_type_conversion(std::forward<A>(a)...);
+        } catch (...) {
+            new (this) future_state(current_exception_future_marker());
+        }
+    }
+    template<typename U>
+    requires std::is_convertible_v<U&&, T>
+    void set(U&& v) {
         assert(_u.st == state::future);
-        new (this) future_state(ready_future_marker(), std::forward<A>(a)...);
+        new (this) future_state(set_ready_future_marker(), std::forward<U>(v));
+    }
+    template <typename Tup>
+    void set_from_tuple(Tup&& tup) noexcept {
+        assert(_u.st == state::future);
+        new (this) future_state(set_from_tuple_ready_future_marker(), std::forward<Tup>(tup));
+    }
+    template <typename... A>
+    void emplace(A&&... a) noexcept {
+        assert(_u.st == state::future);
+        new (this) future_state(emplace_ready_future_marker(), std::forward<A>(a)...);
+    }
+    template <typename... A>
+    void set_loose_type_conversion(A&&... a) noexcept {
+        assert(_u.st == state::future);
+        new (this) future_state(loose_type_conversion_ready_future_marker(), std::forward<A>(a)...);
     }
     future_state(exception_future_marker, std::exception_ptr&& ex) noexcept : future_state_base(std::move(ex)) { }
     future_state(exception_future_marker, future_state_base&& state) noexcept : future_state_base(std::move(state)) { }
@@ -863,7 +942,8 @@ public:
 template <typename T>
 class promise_base_with_type : protected internal::promise_base {
 protected:
-    using future_state = seastar::future_state<future_stored_type_t<T>>;
+    using stored_type = future_stored_type_t<T>;
+    using future_state = seastar::future_state<stored_type>;
     future_state* get_state() noexcept {
         return static_cast<future_state*>(_state);
     }
@@ -887,10 +967,27 @@ public:
         }
     }
 
-    template <typename... A>
-    void set_value(A&&... a) noexcept {
+    template<typename U>
+    requires std::is_convertible_v<U&&, stored_type>
+    void set_value(U&& v) noexcept {
         if (auto *s = get_state()) {
-            s->set(std::forward<A>(a)...);
+            s->set(std::forward<U>(v));
+            make_ready<urgent::no>();
+        }
+    }
+
+    template <typename... A>
+    void emplace_value(A&&... a) noexcept {
+        if (auto *s = get_state()) {
+            s->emplace(std::forward<A>(a)...);
+            make_ready<urgent::no>();
+        }
+    }
+
+    template <typename... A>
+    void set_value_loose_type_conversion(A&&... a) noexcept {
+        if (auto *s = get_state()) {
+            s->set_loose_type_conversion(std::forward<A>(a)...);
             make_ready<urgent::no>();
         }
     }
@@ -921,6 +1018,7 @@ private:
 /// \tparam T A type to be carried as the result of the associated future. Use void (default) for no result.
 template <typename T>
 class promise : private internal::promise_base_with_type<T> {
+    using accepted_type = typename internal::promise_base_with_type<T>::stored_type;
     using future_state = typename internal::promise_base_with_type<T>::future_state;
     future_state _local_state;
 
@@ -964,6 +1062,14 @@ public:
     /// was attached to the future, it will run.
     future<T> get_future() noexcept;
 
+
+    /// \brief Sets the promises value for T=void
+    ///
+    /// pr.set_value();
+    void set_value() noexcept requires std::is_void_v<T> {
+        set_value(internal::monostate{});
+    }
+
     /// \brief Sets the promises value
     ///
     /// Forwards the arguments and makes them available to the associated
@@ -979,7 +1085,24 @@ public:
     /// pr.set_value(std::tuple<int, double>(42, 43.0))
     template <typename... A>
     void set_value(A&&... a) noexcept {
-        internal::promise_base_with_type<T>::set_value(std::forward<A>(a)...);
+        internal::promise_base_with_type<T>::set_value_loose_type_conversion(std::forward<A>(a)...);
+    }
+
+    /// \brief Sets the promises value by constructing it in place
+    ///
+    /// Forwards the arguments and uses them to create the value available to
+    /// the associated future.  May be called either before or after
+    /// \c get_future().
+    ///
+    /// The arguments can have either the types the promise is
+    /// templated with, or a corresponding std::tuple. That is, given
+    /// a promise<int, double>, both calls are valid:
+    ///
+    /// pr.emplace_value(42, 43.0);
+    /// pr.emplace_value(std::tuple<int, double>(42, 43.0))
+    template <typename... A>
+    void emplace_value(A&&... a) noexcept {
+        internal::promise_base_with_type<T>::emplace_value(std::forward<A>(a)...);
     }
 
     /// \brief Marks the promise as failed
@@ -1232,8 +1355,15 @@ private:
     future(future_for_get_promise_marker) noexcept { }
 
     future(promise<T>* pr) noexcept : future_base(pr, &_state), _state(std::move(pr->_local_state)) { }
+
     template <typename... A>
-    future(ready_future_marker m, A&&... a) noexcept : _state(m, std::forward<A>(a)...) { }
+    future(loose_type_conversion_ready_future_marker m, A&&... a) noexcept : _state(m, std::forward<A>(a)...) { }
+    template <typename A>
+    future(set_ready_future_marker m, A&& a) noexcept : _state(m, std::forward<A>(a)) { }
+    template <typename A>
+    future(set_from_tuple_ready_future_marker m, A&& a) noexcept : _state(m, std::forward<A>(a)) { }
+    template <typename... A>
+    future(emplace_ready_future_marker m, A&&... a) noexcept : _state(m, std::forward<A>(a)...) { }
     future(future_state_base::current_exception_future_marker m) noexcept : _state(m) {}
     future(future_state_base::nested_exception_marker m, future_state_base&& old) noexcept : _state(m, std::move(old)) {}
     future(future_state_base::nested_exception_marker m, future_state_base&& n, future_state_base&& old) noexcept : _state(m, std::move(n), std::move(old)) {}
@@ -1804,6 +1934,11 @@ private:
     friend struct futurize;
     template <typename U>
     friend class internal::promise_base_with_type;
+    #if SEASTAR_API_LEVEL >= 10
+    template <typename U>
+    friend future<U> make_ready_future(U&& value) noexcept;
+    #endif
+    // for SEASTAR_API_LEVEL >= 10 it's only needed for U=void
     template <typename U, typename... A>
     friend future<U> make_ready_future(A&&... value) noexcept;
     template <typename U>
@@ -1891,20 +2026,20 @@ struct futurize : public internal::futurize_base<T> {
 
     /// Convert the tuple representation into a future
     static type from_tuple(tuple_type&& value) {
-        return type(ready_future_marker(), std::move(value));
+        return type(set_from_tuple_ready_future_marker(), std::move(value));
     }
     /// Convert the tuple representation into a future
     static type from_tuple(const tuple_type& value) {
-        return type(ready_future_marker(), value);
+        return type(set_from_tuple_ready_future_marker(), value);
     }
 
     /// Convert the tuple representation into a future
     static type from_tuple(value_type&& value) {
-        return type(ready_future_marker(), std::move(value));
+        return type(set_ready_future_marker(), std::move(value));
     }
     /// Convert the tuple representation into a future
     static type from_tuple(const value_type& value) {
-        return type(ready_future_marker(), value);
+        return type(set_ready_future_marker(), value);
     }
 private:
     /// Forwards the result of, or exception thrown by, func() to the
@@ -1942,7 +2077,7 @@ void promise<T>::move_it(promise&& x) noexcept {
 template <typename T, typename... A>
 inline
 future<T> make_ready_future(A&&... value) noexcept {
-    return future<T>(ready_future_marker(), std::forward<A>(value)...);
+    return future<T>(loose_type_conversion_ready_future_marker(), std::forward<A>(value)...);
 }
 
 template <typename T>
@@ -2010,7 +2145,7 @@ void futurize<T>::satisfy_with_result_of(promise_base_with_type&& pr, Func&& fun
     using ret_t = decltype(func());
     if constexpr (std::is_void_v<ret_t>) {
         func();
-        pr.set_value();
+        pr.set_value(internal::monostate{});
     } else if constexpr (is_future<ret_t>::value) {
         func().forward_to(std::move(pr));
     } else {

@@ -336,7 +336,7 @@ public:
     void uninitialized_set_loose_type_conversion(tuple_type&& v) {
         uninitialized_set(std::move(std::get<0>(v)));
     }
-    void uninitialized_set_legacy(const tuple_type& v) {
+    void uninitialized_set_loose_type_conversion(const tuple_type& v) {
         uninitialized_set(std::get<0>(v));
     }
     maybe_wrap_ref<T>& uninitialized_get() {

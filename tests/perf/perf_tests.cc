@@ -274,6 +274,7 @@ struct result_printer {
 
     virtual void print_configuration(const config&) = 0;
     virtual void print_result(const result&) = 0;
+    virtual void print_summary(clock_type::duration /*total_duration*/) { }
 
     void update_name_column_length(size_t length) {
         _name_column_length = std::max(1ul, length);
@@ -713,12 +714,14 @@ class json_printer final : public result_printer {
     std::unordered_map<std::string,
                        std::unordered_map<std::string,
                                           std::unordered_map<std::string, double>>> _root;
+    std::unordered_map<std::string, double> _summary;
 public:
     explicit json_printer(const std::string& file) : _output_file(file) { }
 
     ~json_printer() {
         std::ofstream out(_output_file);
-        out << json::formatter::to_json(_root);
+        out << "{\"results\":" << json::formatter::to_json(_root["results"])
+            << ",\"summary\":"  << json::formatter::to_json(_summary) << "}";
     }
 
     virtual void print_configuration(const config&) override { }
@@ -731,6 +734,10 @@ public:
         for (auto& c : json_columns) {
             result[c.header] = c.to_double(r);
         }
+    }
+
+    virtual void print_summary(clock_type::duration total_duration) override {
+        _summary["total_runtime_s"] = std::chrono::duration<double>(total_duration).count();
     }
 };
 
@@ -897,10 +904,15 @@ void run_all(const std::vector<std::string>& test_patterns, config& conf) {
         rp->update_name_column_length(max_name_column_length);
         rp->print_configuration(conf);
     }
+    auto run_start = clock_type::now();
     for (auto& t : all_tests()) {
         if (match(t.get())) {
             t->run(conf);
         }
+    }
+    auto total_duration = clock_type::now() - run_start;
+    for (auto& rp : conf.printers) {
+        rp->print_summary(total_duration);
     }
 }
 

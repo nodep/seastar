@@ -233,6 +233,20 @@ void reactor::rename_queues(internal::priority_class pc, sstring new_name) {
     }
 }
 
+io_queue& reactor::get_io_queue(dev_t devid) {
+    auto queue = _io_queues.find(devid);
+    if (queue == _io_queues.end()) {
+        return *_io_queues.at(0);
+    } else {
+        return *(queue->second);
+    }
+}
+
+io_queue* reactor::try_get_io_queue(dev_t devid) noexcept {
+    auto queue = _io_queues.find(devid);
+    return queue != _io_queues.end() ? queue->second.get() : nullptr;
+}
+
 future<std::tuple<pollable_fd, socket_address>>
 reactor::do_accept(pollable_fd_state& listenfd) {
     return readable_or_writeable(listenfd).then([this, &listenfd] () mutable {

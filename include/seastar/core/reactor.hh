@@ -490,6 +490,9 @@ public:
     io_queue& get_io_queue(dev_t devid = 0);
     io_queue* try_get_io_queue(dev_t devid) noexcept;
 
+    /// Returns pointers to all io_queues on this shard.
+    std::vector<io_queue*> get_all_io_queues();
+
     std::string_view get_backend_name() const;
 
 private:

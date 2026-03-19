@@ -19,6 +19,7 @@
  * Copyright 2014 Cloudius Systems
  */
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -245,6 +246,18 @@ io_queue& reactor::get_io_queue(dev_t devid) {
 io_queue* reactor::try_get_io_queue(dev_t devid) noexcept {
     auto queue = _io_queues.find(devid);
     return queue != _io_queues.end() ? queue->second.get() : nullptr;
+}
+
+std::vector<io_queue*> reactor::get_all_io_queues() {
+    std::vector<io_queue*> queues;
+    queues.reserve(_io_queues.size());
+    for (auto& [_, q] : _io_queues) {
+        auto* p = q.get();
+        if (std::find(queues.begin(), queues.end(), p) == queues.end()) {
+            queues.push_back(p);
+        }
+    }
+    return queues;
 }
 
 future<std::tuple<pollable_fd, socket_address>>

@@ -170,6 +170,7 @@ SEASTAR_TEST_CASE(test_reference) {
     return make_ready_future<>();
 }
 
+#if SEASTAR_API_LEVEL < 10
 SEASTAR_TEST_CASE(test_set_future_state_with_tuple) {
     future_state<std::tuple<int>> s1;
     promise<int> p1;
@@ -179,6 +180,7 @@ SEASTAR_TEST_CASE(test_set_future_state_with_tuple) {
 
     return make_ready_future<>();
 }
+#endif
 
 SEASTAR_THREAD_TEST_CASE(test_set_value_make_exception_in_copy) {
     struct throw_in_copy {

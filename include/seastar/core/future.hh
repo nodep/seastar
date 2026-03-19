@@ -156,6 +156,19 @@ class shared_future;
 
 struct future_state_base;
 
+#if SEASTAR_API_LEVEL >= 10
+
+/// \brief Creates a \ref future in an available, value state.
+///
+/// Creates a \ref future object that is already resolved.  This
+/// is useful when it is determined that no I/O needs to be performed
+/// to perform a computation (for example, because the data is cached
+/// in some buffer).
+template <typename T>
+future<T> make_ready_future(T&& value) noexcept;
+
+#endif
+
 /// \brief Creates a \ref future in an available, value state.
 ///
 /// Creates a \ref future object that is already resolved.  This
@@ -1070,6 +1083,7 @@ public:
         set_value(internal::monostate{});
     }
 
+#if SEASTAR_API_LEVEL < 10
     /// \brief Sets the promises value
     ///
     /// Forwards the arguments and makes them available to the associated
@@ -1087,6 +1101,34 @@ public:
     void set_value(A&&... a) noexcept {
         internal::promise_base_with_type<T>::set_value_loose_type_conversion(std::forward<A>(a)...);
     }
+#else
+    /// \brief Sets the promises value
+    ///
+    /// Forwards the argument and makes them available to the associated
+    /// future. May be called either before or after \c get_future().
+    /// Must be called at most once, setting value on a promise with a value
+    /// is undefined behavior. Must not be called after \c set_exception().
+    ///
+    /// This non-templated overried only exists to support co_returning
+    /// a braced-init-list.
+    ///
+    /// pr.set_value({1, 2, 3});
+    void set_value(accepted_type&& value) noexcept {
+        internal::promise_base_with_type<T>::set_value(std::forward<accepted_type>(value));
+    }
+
+    /// \brief Sets the promises value using the declared type rvalue reference
+    ///
+    /// Forwards the argument and makes them available to the associated
+    /// future. May be called either before or after \c get_future().
+    /// Must be called at most once, setting value on a promise with a value
+    /// is undefined behavior. Must not be called after \c set_exception().
+    ///
+    /// pr.set_value(42);
+    /// pr.set_value(std::move(my_value));
+    /// pr.set_value(var); // invokes copy constructor
+    using internal::promise_base_with_type<T>::set_value;
+#endif
 
     /// \brief Sets the promises value by constructing it in place
     ///
@@ -2074,11 +2116,29 @@ void promise<T>::move_it(promise&& x) noexcept {
     }
 }
 
+#if SEASTAR_API_LEVEL < 10
+
 template <typename T, typename... A>
 inline
 future<T> make_ready_future(A&&... value) noexcept {
     return future<T>(loose_type_conversion_ready_future_marker(), std::forward<A>(value)...);
 }
+
+#else
+
+template <typename T>
+inline
+future<T> make_ready_future(T&& value) noexcept {
+    return future<T>(set_ready_future_marker(), std::forward<T>(value));
+}
+
+template <typename T, typename... A>
+inline
+future<T> make_ready_future(A&&... value) noexcept {
+    return future<T>(emplace_ready_future_marker(), std::forward<A>(value)...);
+}
+
+#endif
 
 template <typename T>
 inline

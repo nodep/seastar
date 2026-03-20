@@ -20,6 +20,7 @@
  * Copyright (C) 2021 ScyllaDB
  */
 
+#include <algorithm>
 #include <chrono>
 #include <ratio>
 #include <seastar/core/thread.hh>
@@ -972,4 +973,24 @@ SEASTAR_THREAD_TEST_CASE(test_2_class_group_bandwidth_throttler_fair_shares) {
     destroy_scheduling_group(sg1).get();
     destroy_scheduling_group(sg0).get();
     destroy_scheduling_supergroup(ssg).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_get_all_io_queues) {
+    auto queues = engine().get_all_io_queues();
+    // The test environment should have at least one io_queue configured
+    BOOST_CHECK(!queues.empty());
+    // Verify no duplicates (io_queues can be shared between devices)
+    std::sort(queues.begin(), queues.end());
+    auto it = std::unique(queues.begin(), queues.end());
+    BOOST_CHECK(it == queues.end());
+    // The default io_queue (device 0) should be in the returned set
+    auto& default_queue = engine().get_io_queue(0);
+    BOOST_CHECK(std::find(queues.begin(), queues.end(), &default_queue) != queues.end());
+    // Every queue reachable via try_get_io_queue for known devices
+    // should appear in the result. Stat the current directory to
+    // discover its device and verify the queue for that device is present.
+    auto sd = file_stat(".").get();
+    if (auto* q = engine().try_get_io_queue(sd.device_id)) {
+        BOOST_CHECK(std::find(queues.begin(), queues.end(), q) != queues.end());
+    }
 }

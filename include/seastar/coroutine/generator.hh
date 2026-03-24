@@ -88,6 +88,20 @@ elements_of(Range&&) -> elements_of<Range>;
 
 namespace internal {
 
+/// Transfer control to \p target via symmetric transfer if no preemption is needed;
+/// otherwise schedule \p target through the Seastar reactor and return noop_coroutine.
+///
+/// Both generator variants use this helper in every await_suspend to avoid duplicating
+/// the need_preempt() / schedule() / noop_coroutine() pattern.
+inline std::coroutine_handle<> schedule_or_resume(std::coroutine_handle<> target) noexcept {
+    if (!seastar::need_preempt()) {
+        return target;
+    }
+    auto task_handle = std::coroutine_handle<seastar::task>::from_address(target.address());
+    seastar::schedule(&task_handle.promise());
+    return std::noop_coroutine();
+}
+
 namespace unbuffered {
 
 template <typename Yielded>
@@ -209,13 +223,7 @@ struct generator_promise_base<Yielded>::yield_awaiter final {
     std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> producer SEASTAR_COROUTINE_LOC_PARAM) noexcept {
         SEASTAR_COROUTINE_LOC_STORE(producer.promise());
         _promise->_waiting_task = &producer.promise();
-        if (seastar::need_preempt()) {
-            auto consumer = std::coroutine_handle<seastar::task>::from_address(
-                _consumer.address());
-            seastar::schedule(&consumer.promise());
-            return std::noop_coroutine();
-        }
-        return _consumer;
+        return schedule_or_resume(_consumer);
     }
     void await_resume() noexcept {}
 };
@@ -234,15 +242,8 @@ struct generator_promise_base<Yielded>::copy_awaiter final {
     std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> producer SEASTAR_COROUTINE_LOC_PARAM) noexcept {
         SEASTAR_COROUTINE_LOC_STORE(producer.promise());
         _value_ptr = std::addressof(_value);
-        auto& current = producer.promise();
-        _promise->_waiting_task = &current;
-        if (seastar::need_preempt()) {
-            auto consumer = std::coroutine_handle<seastar::task>::from_address(
-                _consumer.address());
-            seastar::schedule(&consumer.promise());
-            return std::noop_coroutine();
-        }
-        return _consumer;
+        _promise->_waiting_task = &producer.promise();
+        return schedule_or_resume(_consumer);
     }
     constexpr void await_resume() const noexcept {}
 };
@@ -412,17 +413,8 @@ public:
         template <typename Promise>
         std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> consumer SEASTAR_COROUTINE_LOC_PARAM) noexcept {
             SEASTAR_COROUTINE_LOC_STORE(consumer.promise());
-            auto& promise = _gen->_coro.promise();
-            promise._consumer = consumer;
-            // Check if we need to preempt. If not, directly resume producer.
-            // If yes, schedule the producer through the scheduler.
-            if (!seastar::need_preempt()) {
-                return _gen->_coro;
-            }
-            auto producer_handle = std::coroutine_handle<seastar::task>::from_address(
-                _gen->_coro.address());
-            seastar::schedule(&producer_handle.promise());
-            return std::noop_coroutine();
+            _gen->_coro.promise()._consumer = consumer;
+            return schedule_or_resume(_gen->_coro);
         }
 
         optional_type await_resume() {
@@ -669,13 +661,7 @@ public:
     std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> producer SEASTAR_COROUTINE_LOC_PARAM) noexcept {
         SEASTAR_COROUTINE_LOC_STORE(producer.promise());
         _promise->_waiting_task = &producer.promise();
-        if (seastar::need_preempt()) {
-            auto consumer = std::coroutine_handle<seastar::task>::from_address(
-                _consumer.address());
-            seastar::schedule(&consumer.promise());
-            return std::noop_coroutine();
-        }
-        return _consumer;
+        return schedule_or_resume(_consumer);
     }
     void await_resume() noexcept {}
 };
@@ -779,23 +765,13 @@ public:
         template <typename Promise>
         std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> consumer SEASTAR_COROUTINE_LOC_PARAM) noexcept {
             SEASTAR_COROUTINE_LOC_STORE(consumer.promise());
-            // Buffer is empty, need to resume producer to get more elements
+            // Buffer is empty, need to resume producer to get more elements.
+            // Clear the buffer before resuming so the producer starts fresh.
             auto& promise = _gen->_coro.promise();
             promise._consumer = consumer;
-
-            // Clear the buffer before resuming producer
             promise.buffer().clear();
             _gen->_buffer_index = 0;
-
-            // Check if we need to preempt. If not, directly resume producer.
-            // If yes, schedule the producer through the scheduler.
-            if (!seastar::need_preempt()) {
-                return _gen->_coro;
-            }
-            auto producer_handle = std::coroutine_handle<seastar::task>::from_address(
-                _gen->_coro.address());
-            seastar::schedule(&producer_handle.promise());
-            return std::noop_coroutine();
+            return schedule_or_resume(_gen->_coro);
         }
 
         optional_type await_resume() {

@@ -918,7 +918,9 @@ public:
             }
 
             // This shouldn't happen - we resumed producer but got no elements
-            return std::nullopt;
+            // and the coroutine is neither done nor has it set _finished.
+            SEASTAR_ASSERT(false && "buffered generator: producer resumed but produced no elements");
+            __builtin_unreachable();
         }
     };
 

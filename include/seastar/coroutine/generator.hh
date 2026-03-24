@@ -391,7 +391,6 @@ public:
 private:
     using handle_type = std::coroutine_handle<promise_type>;
     handle_type _coro = {};
-    bool _started = false;
 
 public:
     generator() noexcept = default;
@@ -400,7 +399,6 @@ public:
     {}
     generator(generator&& other) noexcept
         : _coro{std::exchange(other._coro, {})}
-        , _started{std::exchange(other._started, false)}
     {}
     generator(const generator&) = delete;
     generator& operator=(const generator&) = delete;
@@ -413,7 +411,6 @@ public:
 
     friend void swap(generator& lhs, generator& rhs) noexcept {
         std::swap(lhs._coro, rhs._coro);
-        std::swap(lhs._started, rhs._started);
     }
 
     generator& operator=(generator&& other) noexcept {
@@ -424,7 +421,6 @@ public:
             _coro.destroy();
         }
         _coro = std::exchange(other._coro, nullptr);
-        _started = std::exchange(other._started, false);
         return *this;
     }
 
@@ -471,10 +467,6 @@ public:
         optional_type await_resume() {
             if (!_gen->_coro) {
                 return std::nullopt;
-            }
-
-            if (!_gen->_started) {
-                _gen->_started = true;
             }
 
             auto& promise = _gen->_coro.promise();
@@ -785,7 +777,6 @@ public:
 private:
     using handle_type = std::coroutine_handle<promise_type>;
     handle_type _coro = {};
-    bool _started = false;
     size_t _buffer_index = 0;  // Current position in the buffer
 
 public:
@@ -795,7 +786,6 @@ public:
     {}
     generator(generator&& other) noexcept
         : _coro{std::exchange(other._coro, {})}
-        , _started{std::exchange(other._started, false)}
         , _buffer_index{std::exchange(other._buffer_index, 0)}
     {}
     generator(const generator&) = delete;
@@ -809,7 +799,6 @@ public:
 
     friend void swap(generator& lhs, generator& rhs) noexcept {
         std::swap(lhs._coro, rhs._coro);
-        std::swap(lhs._started, rhs._started);
         std::swap(lhs._buffer_index, rhs._buffer_index);
     }
 
@@ -821,7 +810,6 @@ public:
             _coro.destroy();
         }
         _coro = std::exchange(other._coro, nullptr);
-        _started = std::exchange(other._started, false);
         _buffer_index = std::exchange(other._buffer_index, 0);
         return *this;
     }
@@ -891,10 +879,6 @@ public:
             // Check for invalid/null coroutine first
             if (!_gen->_coro) {
                 return std::nullopt;
-            }
-
-            if (!_gen->_started) {
-                _gen->_started = true;
             }
 
             auto& promise = _gen->_coro.promise();

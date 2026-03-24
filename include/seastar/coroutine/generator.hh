@@ -90,8 +90,6 @@ namespace internal {
 
 namespace unbuffered {
 
-template <typename Yielded> class next_awaiter;
-
 template <typename Yielded>
 class generator_promise_base : public seastar::task {
     using yielded_deref_type = std::remove_reference_t<Yielded>;
@@ -197,7 +195,6 @@ public:
 
 private:
     template<typename, typename> friend class generator;
-    friend class next_awaiter<Yielded>;
 };
 
 template <typename Yielded>
@@ -248,42 +245,6 @@ struct generator_promise_base<Yielded>::copy_awaiter final {
         return _consumer;
     }
     constexpr void await_resume() const noexcept {}
-};
-
-/// awaiter returned when the consumer calls \c operator() to get the next value.
-template <typename Yielded>
-class [[nodiscard]] next_awaiter {
-protected:
-    generator_promise_base<Yielded>* _promise = nullptr;
-    std::coroutine_handle<> _producer = nullptr;
-
-    explicit next_awaiter(std::nullptr_t) noexcept {}
-    next_awaiter(generator_promise_base<Yielded>& promise,
-                 std::coroutine_handle<> producer) noexcept
-        : _promise{std::addressof(promise)}
-        , _producer{producer} {}
-
-public:
-    bool await_ready() const noexcept {
-        return false;
-    }
-
-    template <typename Promise>
-    std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> consumer SEASTAR_COROUTINE_LOC_PARAM) noexcept {
-        SEASTAR_COROUTINE_LOC_STORE(consumer.promise());
-        _promise->_consumer = consumer;
-        // Check if we need to preempt. If not, directly resume producer.
-        // If yes, schedule the producer through the scheduler.
-        if (!seastar::need_preempt()) {
-            return _producer;
-        }
-        auto producer_handle = std::coroutine_handle<seastar::task>::from_address(
-            _producer.address());
-        seastar::schedule(&producer_handle.promise());
-        return std::noop_coroutine();
-    }
-
-    void await_resume() noexcept {}
 };
 
 /// unbuffered generator provides a simple async API for generating values.
@@ -577,8 +538,6 @@ concept bounded_container = requires(T container, typename T::value_type element
     { container[size_t()] } -> std::convertible_to<typename T::value_type&>;
 };
 
-template <bounded_container Container> class next_awaiter;
-
 template <bounded_container Container>
 class generator_promise_base : public seastar::task {
     using element_type = typename Container::value_type;
@@ -688,7 +647,6 @@ public:
 
 private:
     template<typename, typename, bounded_container> friend class generator;
-    friend class next_awaiter<Container>;
 };
 
 template <bounded_container Container>
@@ -719,41 +677,6 @@ public:
         }
         return _consumer;
     }
-    void await_resume() noexcept {}
-};
-
-template <bounded_container Container>
-class [[nodiscard]] next_awaiter {
-protected:
-    generator_promise_base<Container>* _promise = nullptr;
-    std::coroutine_handle<> _producer = nullptr;
-
-public:
-    explicit next_awaiter(std::nullptr_t) noexcept {}
-    next_awaiter(generator_promise_base<Container>& promise,
-                 std::coroutine_handle<> producer) noexcept
-        : _promise{std::addressof(promise)}
-        , _producer{producer} {}
-
-    bool await_ready() const noexcept {
-        return false;
-    }
-
-    template <typename Promise>
-    std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> consumer SEASTAR_COROUTINE_LOC_PARAM) noexcept {
-        SEASTAR_COROUTINE_LOC_STORE(consumer.promise());
-        _promise->_consumer = consumer;
-        // Check if we need to preempt. If not, directly resume producer.
-        // If yes, schedule the producer through the scheduler.
-        if (!seastar::need_preempt()) {
-            return _producer;
-        }
-        auto producer_handle = std::coroutine_handle<seastar::task>::from_address(
-            _producer.address());
-        seastar::schedule(&producer_handle.promise());
-        return std::noop_coroutine();
-    }
-
     void await_resume() noexcept {}
 };
 

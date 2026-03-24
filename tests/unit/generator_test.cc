@@ -19,6 +19,7 @@
  * Copyright (C) 2022 Kefu Chai ( tchaikov@gmail.com )
  */
 
+#include <seastar/core/circular_buffer_fixed_capacity.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/generator.hh>
@@ -26,6 +27,7 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/util/bool_class.hh>
 #include <seastar/util/later.hh>
+#include <span>
 #include <string>
 #include <string_view>
 #if __cplusplus >= 202302L && defined(__cpp_lib_generator)
@@ -264,11 +266,11 @@ async_fibonacci_sequence_batch(unsigned count, unsigned batch_size, do_suspend s
         int next = std::exchange(a, std::exchange(b, a + b));
         batch.push_back(next);
         if (batch.size() == batch_size) {
-            co_yield std::exchange(batch, {});
+            co_yield coroutine::experimental::elements_of(std::exchange(batch, {}));
         }
     }
     if (!batch.empty()) {
-        co_yield std::move(batch);
+        co_yield coroutine::experimental::elements_of(std::move(batch));
     }
 }
 
@@ -337,11 +339,11 @@ SEASTAR_TEST_CASE(test_batch_generator_move_away) {
         for (int i = 0; i < count; i++) {
             batch.push_back(i);
             if (batch.size() == batch_size) {
-                co_yield std::exchange(batch, {});
+                co_yield coroutine::experimental::elements_of(std::exchange(batch, {}));
             }
         }
         if (!batch.empty()) {
-            co_yield std::move(batch);
+            co_yield coroutine::experimental::elements_of(std::move(batch));
         }
     });
 
@@ -372,11 +374,11 @@ SEASTAR_TEST_CASE(test_batch_generator_convertible) {
         for (int i = 0; i < count; i++) {
             batch.push_back(fmt::to_string(i));
             if (batch.size() == batch_size) {
-                co_yield std::exchange(batch, {});
+                co_yield coroutine::experimental::elements_of(std::exchange(batch, {}));
             }
         }
         if (!batch.empty()) {
-            co_yield std::move(batch);
+            co_yield coroutine::experimental::elements_of(std::move(batch));
         }
     });
 
@@ -490,4 +492,57 @@ SEASTAR_TEST_CASE(test_can_push_more_cpo) {
     }
 
     co_return;
+}
+
+// elements_of with a view type (std::span rvalue) must NOT move from the backing
+// storage.
+SEASTAR_TEST_CASE(test_batch_generator_elements_of_borrowed_range) {
+    using gen_t = coroutine::experimental::generator<std::string, std::string,
+                                                     std::vector<std::string>>;
+
+    std::vector<std::string> data = {"hello", "world", "foo", "bar"};
+
+    auto gen = std::invoke([](std::span<std::string> view) -> gen_t {
+        // Rvalue span: Range deduces to std::span<std::string> (not a reference).
+        co_yield coroutine::experimental::elements_of(
+            std::span<std::string>(view));
+    }, std::span<std::string>(data));
+
+    std::vector<std::string> received;
+    while (auto val = co_await gen()) {
+        received.push_back(*val);
+    }
+
+    // Elements must have been copied, not moved: data strings are still intact.
+    BOOST_REQUIRE_EQUAL(data[0], "hello");
+    BOOST_REQUIRE_EQUAL(data[1], "world");
+    BOOST_REQUIRE_EQUAL(data[2], "foo");
+    BOOST_REQUIRE_EQUAL(data[3], "bar");
+
+    BOOST_REQUIRE_EQUAL(received[0], "hello");
+    BOOST_REQUIRE_EQUAL(received[1], "world");
+    BOOST_REQUIRE_EQUAL(received[2], "foo");
+    BOOST_REQUIRE_EQUAL(received[3], "bar");
+}
+
+// Regression test: a buffered generator with count not a multiple of buffer_size
+// must correctly return nullopt after all elements are consumed.
+SEASTAR_TEST_CASE(test_batch_generator_partial_last_batch) {
+    constexpr int count = 7;
+    using gen_t = coroutine::experimental::generator<int, int,
+                      circular_buffer_fixed_capacity<int, 4>>;
+
+    auto gen = std::invoke([]() -> gen_t {
+        for (int i = 0; i < count; ++i) {
+            co_yield i;
+        }
+    });
+
+    for (int expected = 0; expected < count; ++expected) {
+        auto val = co_await gen();
+        BOOST_REQUIRE(val.has_value());
+        BOOST_REQUIRE_EQUAL(*val, expected);
+    }
+    auto exhausted = co_await gen();
+    BOOST_REQUIRE(!exhausted.has_value());
 }

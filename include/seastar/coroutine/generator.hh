@@ -26,6 +26,7 @@
 #include <iterator>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <type_traits>
 #include <utility>
 #include <seastar/core/future.hh>
@@ -62,6 +63,28 @@
 //   This provides flexibility to yield data in whatever form is most convenient for
 //   the producer, while the generator handles efficient batching internally.
 namespace seastar::coroutine::experimental {
+
+/// Tag type for yielding all elements of a range from a buffered generator.
+///
+/// Used to disambiguate \c co_yield when the element type is itself a range.
+/// Instead of:
+/// \code
+///   co_yield my_vec;  // ambiguous: yield vec as one element, or its contents?
+/// \endcode
+/// Write:
+/// \code
+///   co_yield elements_of(my_vec);  // unambiguous: yield each element
+/// \endcode
+///
+/// Inspired by \c std::ranges::elements_of from C++23 (P2502R2).
+template <std::ranges::range Range>
+struct elements_of {
+    Range range;
+    explicit elements_of(Range&& r) noexcept : range(std::forward<Range>(r)) {}
+};
+
+template <std::ranges::range Range>
+elements_of(Range&&) -> elements_of<Range>;
 
 namespace internal {
 
@@ -613,22 +636,29 @@ public:
         return yield_awaiter{this, this->_consumer, should_suspend};
     }
 
-    // Yield a range/slice of elements (C++23 ranges support)
+    // Yield all elements of a range (use co_yield elements_of(range))
+    //
+    // The elements_of tag disambiguates from yielding a range as a single value:
+    //   co_yield elements_of(vec)  -> yields each element of vec
+    //   co_yield vec               -> yields vec as a single element_type
+    //
     // IMPORTANT: The entire range must fit in the buffer. If the range is larger
     // than the buffer capacity, elements will be lost when the buffer overflows.
-    // For large datasets, yield elements individually instead of as a range.
+    // For large datasets, yield elements individually instead.
     template <std::ranges::range Range>
     requires std::convertible_to<std::ranges::range_value_t<Range>, element_type>
-    yield_awaiter yield_value(Range&& range) {
-        // Add all elements from the range to the buffer
+    yield_awaiter yield_value(elements_of<Range> elems) {
+        // Add all elements from the range to the buffer.
         // Note: We cannot break mid-range because rvalue ranges would be destroyed,
         // losing the remaining elements. The buffer must have sufficient capacity.
-        for (auto&& element : range) {
-            // Move from rvalue ranges, copy/move from lvalue ranges based on element type
-            if constexpr (std::is_rvalue_reference_v<decltype(range)>) {
-                _buffer.push_back(std::move(element));
-            } else {
+        for (auto&& element : elems.range) {
+            // Borrowed ranges — lvalue refs, std::span, std::string_view, etc. —
+            // have elements that live in storage we don't own, so we must not move.
+            // Move elements only when we own the range (non-borrowed).
+            if constexpr (std::ranges::borrowed_range<Range>) {
                 _buffer.push_back(std::forward<decltype(element)>(element));
+            } else {
+                _buffer.push_back(std::move(element));
             }
         }
 
@@ -931,9 +961,9 @@ public:
 /// \code
 /// generator<const int&, int, circular_buffer_fixed_capacity<int, 128>> generate() {
 ///     std::vector<int> batch = get_batch();
-///     co_yield batch;  // Yields entire range, appended to buffer
+///     co_yield elements_of(batch);  // Yields each element of batch
 ///
-///     co_yield std::span(data, 10);  // Can yield spans, views, etc.
+///     co_yield elements_of(std::span(data, 10));  // Can yield spans, views, etc.
 /// }
 /// \endcode
 ///

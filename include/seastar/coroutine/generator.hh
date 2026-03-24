@@ -556,6 +556,7 @@ concept bounded_container = requires(T container, typename T::value_type element
     // Must support element addition and removal
     { container.push_back(std::move(element)) } -> std::same_as<void>;
     { container.clear() } -> std::same_as<void>;
+    { container.empty() } -> std::convertible_to<bool>;
 
     // Must support indexed access
     { container[size_t()] } -> std::convertible_to<typename T::value_type&>;

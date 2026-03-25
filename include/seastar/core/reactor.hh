@@ -487,19 +487,11 @@ public:
         return now() - _start_time;
     }
 
-    io_queue& get_io_queue(dev_t devid = 0) {
-        auto queue = _io_queues.find(devid);
-        if (queue == _io_queues.end()) {
-            return *_io_queues.at(0);
-        } else {
-            return *(queue->second);
-        }
-    }
+    io_queue& get_io_queue(dev_t devid = 0);
+    io_queue* try_get_io_queue(dev_t devid) noexcept;
 
-    io_queue* try_get_io_queue(dev_t devid) noexcept {
-        auto queue = _io_queues.find(devid);
-        return queue != _io_queues.end() ? queue->second.get() : nullptr;
-    }
+    /// Returns pointers to all io_queues on this shard.
+    std::vector<io_queue*> get_all_io_queues();
 
     std::string_view get_backend_name() const;
 

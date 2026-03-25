@@ -97,9 +97,9 @@ namespace seastar {
 // immediately. There is a performance/memory tradeoff of how many freed
 // chunks to save: If we save them all, the queue can never shrink from
 // its maximum memory use (this is how circular_buffer behaves).
-// The ad-hoc choice made here is to limit the number of saved chunks to 1.
+// The ad-hoc choice made here is to limit the number of saved chunks to 0.
 
-template <typename T, size_t items_per_chunk = 128, size_t save_free_chunks = 1>
+template <typename T, size_t items_per_chunk = 128, size_t save_free_chunks = 0>
 class chunked_fifo {
     static_assert((items_per_chunk & (items_per_chunk - 1)) == 0,
             "chunked_fifo chunk size must be power of two");

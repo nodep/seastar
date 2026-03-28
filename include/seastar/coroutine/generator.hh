@@ -26,6 +26,7 @@
 #include <iterator>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <type_traits>
 #include <utility>
 #include <seastar/core/future.hh>
@@ -63,11 +64,45 @@
 //   the producer, while the generator handles efficient batching internally.
 namespace seastar::coroutine::experimental {
 
+/// Tag type for yielding all elements of a range from a buffered generator.
+///
+/// Used to disambiguate \c co_yield when the element type is itself a range.
+/// Instead of:
+/// \code
+///   co_yield my_vec;  // ambiguous: yield vec as one element, or its contents?
+/// \endcode
+/// Write:
+/// \code
+///   co_yield elements_of(my_vec);  // unambiguous: yield each element
+/// \endcode
+///
+/// Inspired by \c std::ranges::elements_of from C++23 (P2502R2).
+template <std::ranges::range Range>
+struct elements_of {
+    Range range;
+    explicit elements_of(Range&& r) noexcept : range(std::forward<Range>(r)) {}
+};
+
+template <std::ranges::range Range>
+elements_of(Range&&) -> elements_of<Range>;
+
 namespace internal {
 
-namespace unbuffered {
+/// Transfer control to \p target via symmetric transfer if no preemption is needed;
+/// otherwise schedule \p target through the Seastar reactor and return noop_coroutine.
+///
+/// Both generator variants use this helper in every await_suspend to avoid duplicating
+/// the need_preempt() / schedule() / noop_coroutine() pattern.
+inline std::coroutine_handle<> schedule_or_resume(std::coroutine_handle<> target) noexcept {
+    if (!seastar::need_preempt()) {
+        return target;
+    }
+    auto task_handle = std::coroutine_handle<seastar::task>::from_address(target.address());
+    seastar::schedule(&task_handle.promise());
+    return std::noop_coroutine();
+}
 
-template <typename Yielded> class next_awaiter;
+namespace unbuffered {
 
 template <typename Yielded>
 class generator_promise_base : public seastar::task {
@@ -174,7 +209,6 @@ public:
 
 private:
     template<typename, typename> friend class generator;
-    friend class next_awaiter<Yielded>;
 };
 
 template <typename Yielded>
@@ -189,13 +223,7 @@ struct generator_promise_base<Yielded>::yield_awaiter final {
     std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> producer SEASTAR_COROUTINE_LOC_PARAM) noexcept {
         SEASTAR_COROUTINE_LOC_STORE(producer.promise());
         _promise->_waiting_task = &producer.promise();
-        if (seastar::need_preempt()) {
-            auto consumer = std::coroutine_handle<seastar::task>::from_address(
-                _consumer.address());
-            seastar::schedule(&consumer.promise());
-            return std::noop_coroutine();
-        }
-        return _consumer;
+        return schedule_or_resume(_consumer);
     }
     void await_resume() noexcept {}
 };
@@ -214,53 +242,10 @@ struct generator_promise_base<Yielded>::copy_awaiter final {
     std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> producer SEASTAR_COROUTINE_LOC_PARAM) noexcept {
         SEASTAR_COROUTINE_LOC_STORE(producer.promise());
         _value_ptr = std::addressof(_value);
-        auto& current = producer.promise();
-        _promise->_waiting_task = &current;
-        if (seastar::need_preempt()) {
-            auto consumer = std::coroutine_handle<seastar::task>::from_address(
-                _consumer.address());
-            seastar::schedule(&consumer.promise());
-            return std::noop_coroutine();
-        }
-        return _consumer;
+        _promise->_waiting_task = &producer.promise();
+        return schedule_or_resume(_consumer);
     }
     constexpr void await_resume() const noexcept {}
-};
-
-/// awaiter returned when the consumer calls \c operator() to get the next value.
-template <typename Yielded>
-class [[nodiscard]] next_awaiter {
-protected:
-    generator_promise_base<Yielded>* _promise = nullptr;
-    std::coroutine_handle<> _producer = nullptr;
-
-    explicit next_awaiter(std::nullptr_t) noexcept {}
-    next_awaiter(generator_promise_base<Yielded>& promise,
-                 std::coroutine_handle<> producer) noexcept
-        : _promise{std::addressof(promise)}
-        , _producer{producer} {}
-
-public:
-    bool await_ready() const noexcept {
-        return false;
-    }
-
-    template <typename Promise>
-    std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> consumer SEASTAR_COROUTINE_LOC_PARAM) noexcept {
-        SEASTAR_COROUTINE_LOC_STORE(consumer.promise());
-        _promise->_consumer = consumer;
-        // Check if we need to preempt. If not, directly resume producer.
-        // If yes, schedule the producer through the scheduler.
-        if (!seastar::need_preempt()) {
-            return _producer;
-        }
-        auto producer_handle = std::coroutine_handle<seastar::task>::from_address(
-            _producer.address());
-        seastar::schedule(&producer_handle.promise());
-        return std::noop_coroutine();
-    }
-
-    void await_resume() noexcept {}
 };
 
 /// unbuffered generator provides a simple async API for generating values.
@@ -368,7 +353,6 @@ public:
 private:
     using handle_type = std::coroutine_handle<promise_type>;
     handle_type _coro = {};
-    bool _started = false;
 
 public:
     generator() noexcept = default;
@@ -377,7 +361,6 @@ public:
     {}
     generator(generator&& other) noexcept
         : _coro{std::exchange(other._coro, {})}
-        , _started{std::exchange(other._started, false)}
     {}
     generator(const generator&) = delete;
     generator& operator=(const generator&) = delete;
@@ -390,7 +373,6 @@ public:
 
     friend void swap(generator& lhs, generator& rhs) noexcept {
         std::swap(lhs._coro, rhs._coro);
-        std::swap(lhs._started, rhs._started);
     }
 
     generator& operator=(generator&& other) noexcept {
@@ -401,7 +383,6 @@ public:
             _coro.destroy();
         }
         _coro = std::exchange(other._coro, nullptr);
-        _started = std::exchange(other._started, false);
         return *this;
     }
 
@@ -432,26 +413,13 @@ public:
         template <typename Promise>
         std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> consumer SEASTAR_COROUTINE_LOC_PARAM) noexcept {
             SEASTAR_COROUTINE_LOC_STORE(consumer.promise());
-            auto& promise = _gen->_coro.promise();
-            promise._consumer = consumer;
-            // Check if we need to preempt. If not, directly resume producer.
-            // If yes, schedule the producer through the scheduler.
-            if (!seastar::need_preempt()) {
-                return _gen->_coro;
-            }
-            auto producer_handle = std::coroutine_handle<seastar::task>::from_address(
-                _gen->_coro.address());
-            seastar::schedule(&producer_handle.promise());
-            return std::noop_coroutine();
+            _gen->_coro.promise()._consumer = consumer;
+            return schedule_or_resume(_gen->_coro);
         }
 
         optional_type await_resume() {
             if (!_gen->_coro) {
                 return std::nullopt;
-            }
-
-            if (!_gen->_started) {
-                _gen->_started = true;
             }
 
             auto& promise = _gen->_coro.promise();
@@ -556,12 +524,11 @@ concept bounded_container = requires(T container, typename T::value_type element
     // Must support element addition and removal
     { container.push_back(std::move(element)) } -> std::same_as<void>;
     { container.clear() } -> std::same_as<void>;
+    { container.empty() } -> std::convertible_to<bool>;
 
     // Must support indexed access
     { container[size_t()] } -> std::convertible_to<typename T::value_type&>;
 };
-
-template <bounded_container Container> class next_awaiter;
 
 template <bounded_container Container>
 class generator_promise_base : public seastar::task {
@@ -612,22 +579,29 @@ public:
         return yield_awaiter{this, this->_consumer, should_suspend};
     }
 
-    // Yield a range/slice of elements (C++23 ranges support)
+    // Yield all elements of a range (use co_yield elements_of(range))
+    //
+    // The elements_of tag disambiguates from yielding a range as a single value:
+    //   co_yield elements_of(vec)  -> yields each element of vec
+    //   co_yield vec               -> yields vec as a single element_type
+    //
     // IMPORTANT: The entire range must fit in the buffer. If the range is larger
     // than the buffer capacity, elements will be lost when the buffer overflows.
-    // For large datasets, yield elements individually instead of as a range.
+    // For large datasets, yield elements individually instead.
     template <std::ranges::range Range>
     requires std::convertible_to<std::ranges::range_value_t<Range>, element_type>
-    yield_awaiter yield_value(Range&& range) {
-        // Add all elements from the range to the buffer
+    yield_awaiter yield_value(elements_of<Range> elems) {
+        // Add all elements from the range to the buffer.
         // Note: We cannot break mid-range because rvalue ranges would be destroyed,
         // losing the remaining elements. The buffer must have sufficient capacity.
-        for (auto&& element : range) {
-            // Move from rvalue ranges, copy/move from lvalue ranges based on element type
-            if constexpr (std::is_rvalue_reference_v<decltype(range)>) {
-                _buffer.push_back(std::move(element));
-            } else {
+        for (auto&& element : elems.range) {
+            // Borrowed ranges — lvalue refs, std::span, std::string_view, etc. —
+            // have elements that live in storage we don't own, so we must not move.
+            // Move elements only when we own the range (non-borrowed).
+            if constexpr (std::ranges::borrowed_range<Range>) {
                 _buffer.push_back(std::forward<decltype(element)>(element));
+            } else {
+                _buffer.push_back(std::move(element));
             }
         }
 
@@ -665,7 +639,6 @@ public:
 
 private:
     template<typename, typename, bounded_container> friend class generator;
-    friend class next_awaiter<Container>;
 };
 
 template <bounded_container Container>
@@ -688,49 +661,8 @@ public:
     std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> producer SEASTAR_COROUTINE_LOC_PARAM) noexcept {
         SEASTAR_COROUTINE_LOC_STORE(producer.promise());
         _promise->_waiting_task = &producer.promise();
-        if (seastar::need_preempt()) {
-            auto consumer = std::coroutine_handle<seastar::task>::from_address(
-                _consumer.address());
-            seastar::schedule(&consumer.promise());
-            return std::noop_coroutine();
-        }
-        return _consumer;
+        return schedule_or_resume(_consumer);
     }
-    void await_resume() noexcept {}
-};
-
-template <bounded_container Container>
-class [[nodiscard]] next_awaiter {
-protected:
-    generator_promise_base<Container>* _promise = nullptr;
-    std::coroutine_handle<> _producer = nullptr;
-
-public:
-    explicit next_awaiter(std::nullptr_t) noexcept {}
-    next_awaiter(generator_promise_base<Container>& promise,
-                 std::coroutine_handle<> producer) noexcept
-        : _promise{std::addressof(promise)}
-        , _producer{producer} {}
-
-    bool await_ready() const noexcept {
-        return false;
-    }
-
-    template <typename Promise>
-    std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> consumer SEASTAR_COROUTINE_LOC_PARAM) noexcept {
-        SEASTAR_COROUTINE_LOC_STORE(consumer.promise());
-        _promise->_consumer = consumer;
-        // Check if we need to preempt. If not, directly resume producer.
-        // If yes, schedule the producer through the scheduler.
-        if (!seastar::need_preempt()) {
-            return _producer;
-        }
-        auto producer_handle = std::coroutine_handle<seastar::task>::from_address(
-            _producer.address());
-        seastar::schedule(&producer_handle.promise());
-        return std::noop_coroutine();
-    }
-
     void await_resume() noexcept {}
 };
 
@@ -754,7 +686,6 @@ public:
 private:
     using handle_type = std::coroutine_handle<promise_type>;
     handle_type _coro = {};
-    bool _started = false;
     size_t _buffer_index = 0;  // Current position in the buffer
 
 public:
@@ -764,7 +695,6 @@ public:
     {}
     generator(generator&& other) noexcept
         : _coro{std::exchange(other._coro, {})}
-        , _started{std::exchange(other._started, false)}
         , _buffer_index{std::exchange(other._buffer_index, 0)}
     {}
     generator(const generator&) = delete;
@@ -778,7 +708,6 @@ public:
 
     friend void swap(generator& lhs, generator& rhs) noexcept {
         std::swap(lhs._coro, rhs._coro);
-        std::swap(lhs._started, rhs._started);
         std::swap(lhs._buffer_index, rhs._buffer_index);
     }
 
@@ -790,7 +719,6 @@ public:
             _coro.destroy();
         }
         _coro = std::exchange(other._coro, nullptr);
-        _started = std::exchange(other._started, false);
         _buffer_index = std::exchange(other._buffer_index, 0);
         return *this;
     }
@@ -837,33 +765,19 @@ public:
         template <typename Promise>
         std::coroutine_handle<> await_suspend(std::coroutine_handle<Promise> consumer SEASTAR_COROUTINE_LOC_PARAM) noexcept {
             SEASTAR_COROUTINE_LOC_STORE(consumer.promise());
-            // Buffer is empty, need to resume producer to get more elements
+            // Buffer is empty, need to resume producer to get more elements.
+            // Clear the buffer before resuming so the producer starts fresh.
             auto& promise = _gen->_coro.promise();
             promise._consumer = consumer;
-
-            // Clear the buffer before resuming producer
             promise.buffer().clear();
             _gen->_buffer_index = 0;
-
-            // Check if we need to preempt. If not, directly resume producer.
-            // If yes, schedule the producer through the scheduler.
-            if (!seastar::need_preempt()) {
-                return _gen->_coro;
-            }
-            auto producer_handle = std::coroutine_handle<seastar::task>::from_address(
-                _gen->_coro.address());
-            seastar::schedule(&producer_handle.promise());
-            return std::noop_coroutine();
+            return schedule_or_resume(_gen->_coro);
         }
 
         optional_type await_resume() {
             // Check for invalid/null coroutine first
             if (!_gen->_coro) {
                 return std::nullopt;
-            }
-
-            if (!_gen->_started) {
-                _gen->_started = true;
             }
 
             auto& promise = _gen->_coro.promise();
@@ -887,7 +801,9 @@ public:
             }
 
             // This shouldn't happen - we resumed producer but got no elements
-            return std::nullopt;
+            // and the coroutine is neither done nor has it set _finished.
+            SEASTAR_ASSERT(false && "buffered generator: producer resumed but produced no elements");
+            __builtin_unreachable();
         }
     };
 
@@ -930,9 +846,9 @@ public:
 /// \code
 /// generator<const int&, int, circular_buffer_fixed_capacity<int, 128>> generate() {
 ///     std::vector<int> batch = get_batch();
-///     co_yield batch;  // Yields entire range, appended to buffer
+///     co_yield elements_of(batch);  // Yields each element of batch
 ///
-///     co_yield std::span(data, 10);  // Can yield spans, views, etc.
+///     co_yield elements_of(std::span(data, 10));  // Can yield spans, views, etc.
 /// }
 /// \endcode
 ///

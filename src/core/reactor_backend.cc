@@ -66,6 +66,13 @@ public:
     future<> get_future() {
         return _pr.get_future();
     }
+    // Re-arm for reuse after the previous future has been consumed.
+    // Directly replaces _pr with a fresh promise, avoiding the overhead of
+    // constructing a temporary pollable_fd_state_completion (which would
+    // also initialise the vtable pointer unnecessarily).
+    void reset() {
+        _pr = promise<>();
+    }
 };
 
 void prepare_iocb(const io_request& req, io_completion* desc, iocb& iocb) {
@@ -1318,9 +1325,11 @@ private:
         auto sqe = get_sqe();
         ::io_uring_prep_poll_add(sqe, fd.fd.get(), events);
         auto ufd = static_cast<uring_pollable_fd_state*>(&fd);
-        ::io_uring_sqe_set_data(sqe, static_cast<kernel_completion*>(ufd->get_desc(events)));
+        auto* desc = ufd->get_desc(events);
+        desc->reset();
+        ::io_uring_sqe_set_data(sqe, static_cast<kernel_completion*>(desc));
         _has_pending_submissions = true;
-        return ufd->get_completion_future(events);
+        return desc->get_future();
     }
 
     void submit_io_request(const internal::io_request& req, io_completion* completion) {

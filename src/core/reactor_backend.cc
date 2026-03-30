@@ -622,7 +622,7 @@ future<> reactor_backend_aio::poll(pollable_fd_state& fd, int events) {
         auto* iocb = pfd->get_iocb(events);
         auto* desc = pfd->get_desc(events);
         *iocb = make_poll_iocb(fd.fd.get(), events);
-        *desc = pollable_fd_state_completion{};
+        desc->reset();
         set_user_data(*iocb, desc);
         _polling_io.queue(iocb);
         return pfd->get_completion_future(events);
@@ -933,7 +933,7 @@ public:
     {}
     future<> get_completion_future(int event) {
         auto desc = get_desc(event);
-        *desc = pollable_fd_state_completion{};
+        desc->reset();
         return desc->get_future();
     }
 

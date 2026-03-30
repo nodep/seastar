@@ -95,11 +95,11 @@ future<> tls::abstract_credentials::set_simple_pkcs12_file(
 }
 
 tls::dh_params::dh_params(level lvl)
-    : _impl(crypto::provider().get_tls_backend().make_dh_params(lvl)) {
+    : _impl(internal::crypto::provider().get_tls_backend().make_dh_params(lvl)) {
 }
 
 tls::dh_params::dh_params(const blob& b, x509_crt_format fmt)
-    : _impl(crypto::provider().get_tls_backend().make_dh_params(b, fmt)) {
+    : _impl(internal::crypto::provider().get_tls_backend().make_dh_params(b, fmt)) {
 }
 
 tls::dh_params::~dh_params() {
@@ -212,7 +212,7 @@ void tls::credentials_builder::enable_tls_renegotiation() {
 }
 
 tls::certificate_credentials::certificate_credentials()
-    : _impl(crypto::provider().get_tls_backend().make_credentials_impl()) {
+    : _impl(internal::crypto::provider().get_tls_backend().make_credentials_impl()) {
 }
 
 tls::certificate_credentials::~certificate_credentials() {
@@ -314,7 +314,7 @@ void tls::server_credentials::set_alpn_protocols(const std::vector<sstring>& pro
 void tls::credentials_builder::set_session_resume_mode(session_resume_mode m) {
     _session_resume_mode = m;
     if (m != session_resume_mode::NONE) {
-        _session_resume_key = crypto::provider().get_tls_backend().generate_session_ticket_key();
+        _session_resume_key = internal::crypto::provider().get_tls_backend().generate_session_ticket_key();
     }
 }
 

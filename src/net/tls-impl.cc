@@ -111,7 +111,7 @@ tls::dh_params& tls::dh_params::operator=(dh_params&&) noexcept = default;
 future<tls::dh_params> tls::dh_params::from_file(
         const sstring& filename, x509_crt_format fmt) {
     return read_fully(filename, "dh parameters").then([fmt](temporary_buffer<char> buf) {
-        return make_ready_future<tls::dh_params>(tls::dh_params(tls::blob(buf.get()), fmt));
+        return make_ready_future<tls::dh_params>(tls::dh_params(tls::blob(buf.get(), buf.size()), fmt));
     });
 }
 

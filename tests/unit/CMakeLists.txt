@@ -513,6 +513,9 @@ seastar_add_test (epoll
   SOURCES epoll_test.cc
   RUN_ARGS --reactor-backend epoll)
 
+seastar_add_test (reactor_backend
+  SOURCES reactor_backend_test.cc)
+
 seastar_add_test (sstring
   KIND BOOST
   SOURCES sstring_test.cc)

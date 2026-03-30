@@ -147,7 +147,7 @@ public:
     virtual void set_client_auth(client_auth) = 0;
     virtual void set_session_resume_mode(session_resume_mode, std::span<const uint8_t> key = {}) = 0;
     virtual void set_alpn_protocols(const std::vector<sstring>&) = 0;
-    virtual void dh_params(const tls::dh_params&) = 0;
+    virtual void set_dh_params(const tls::dh_params&) = 0;
 
     // GnuTLS-specific — no-op for other backends.
     virtual void set_priority_string(const sstring&) {}

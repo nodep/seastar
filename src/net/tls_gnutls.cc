@@ -360,7 +360,7 @@ public:
                 gnutls_certificate_set_x509_simple_pkcs12_mem(_creds, &w,
                         gnutls_x509_crt_fmt_t(fmt), password.c_str()));
     }
-    void dh_params(const tls::dh_params& dh) override {
+    void set_dh_params(const tls::dh_params& dh) override {
         auto& gnutls_impl = static_cast<gnutls_provider_dh_params_impl&>(*dh._impl);
 #if GNUTLS_VERSION_NUMBER >= 0x030506
         auto sec_param = gnutls_impl.sec_param();

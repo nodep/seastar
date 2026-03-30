@@ -572,7 +572,7 @@ public:
         }
     }
 
-    void dh_params(const tls::dh_params&) override {}
+    void set_dh_params(const tls::dh_params&) override {}
 
     void set_client_auth(tls::client_auth ca) override {
         _client_auth = ca;

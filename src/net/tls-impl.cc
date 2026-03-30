@@ -292,7 +292,7 @@ tls::server_credentials::server_credentials(shared_ptr<dh_params> dh)
 {}
 
 tls::server_credentials::server_credentials(const dh_params& dh) {
-    _impl->dh_params(dh);
+    _impl->set_dh_params(dh);
 }
 
 tls::server_credentials::server_credentials(server_credentials&&) noexcept = default;

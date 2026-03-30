@@ -805,6 +805,18 @@ seastar_add_test (tls
   LIBRARIES Boost::filesystem
   WORKING_DIRECTORY ${Seastar_BINARY_DIR})
 
+# the `tls` test above runs with the default crypto provider, which by
+# convention is GnuTLS, if is available. When both GnuTLS and OpenSSL are
+# available this test provides coverage for the OpenSSL provider. This reuses
+# the tls_test binary built above via CUSTOM to avoid compiling it twice.
+if (Seastar_OPENSSL AND Seastar_GNUTLS)
+  seastar_add_test (tls_openssl
+    KIND CUSTOM
+    WORKING_DIRECTORY ${Seastar_BINARY_DIR}
+    RUN_ARGS $<TARGET_FILE:test_unit_tls> -- -c ${Seastar_UNIT_TEST_SMP} --crypto-provider openssl)
+  add_dependencies (test_unit_tls_openssl_run test_unit_tls tls_files testcrt othercrt mtls_certs https_server)
+endif ()
+
 seastar_add_test (tuple_utils
   KIND BOOST
   SOURCES tuple_utils_test.cc)

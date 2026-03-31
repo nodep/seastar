@@ -50,9 +50,8 @@
 #include "loopback_socket.hh"
 #include "tmpdir.hh"
 
-#include <gnutls/gnutls.h>
-
 #if 0
+#include <gnutls/gnutls.h>
 
 static void enable_gnutls_logging() {
     gnutls_global_set_log_level(99);
@@ -72,6 +71,10 @@ using enable_if_with_networking = boost::unit_test::enable_if<SEASTAR_TESTING_WI
 using enable_if_without_networking = boost::unit_test::enable_if<!SEASTAR_TESTING_WITH_NETWORKING>;
 
 using namespace seastar;
+
+static bool using_gnutls() {
+    return std::string_view(tls::backend_name()) == "gnutls";
+}
 
 static future<> connect_to_ssl_addr(::shared_ptr<tls::certificate_credentials> certs, socket_address addr, const sstring& name = {}) {
     return repeat_until_value([=]() mutable {
@@ -172,6 +175,10 @@ SEASTAR_TEST_CASE(test_x509_client_with_builder_system_trust_multiple,
 
 SEASTAR_TEST_CASE(test_x509_client_with_system_trust_and_priority_strings,
                   *enable_if_with_networking()) {
+    if (!using_gnutls()) {
+        // GnuTLS priority strings are not applicable to OpenSSL
+        return make_ready_future<>();
+    }
     static std::vector<sstring> prios( {
         "NORMAL:+ARCFOUR-128", // means normal ciphers plus ARCFOUR-128.
         "SECURE128:-VERS-SSL3.0:+COMP-DEFLATE", // means that only secure ciphers are enabled, SSL3.0 is disabled, and libz compression enabled.
@@ -193,6 +200,10 @@ SEASTAR_TEST_CASE(test_x509_client_with_system_trust_and_priority_strings,
 
 SEASTAR_TEST_CASE(test_x509_client_with_system_trust_and_priority_strings_fail,
                   *enable_if_with_networking()) {
+    if (!using_gnutls()) {
+        // GnuTLS priority strings are not applicable to OpenSSL
+        return make_ready_future<>();
+    }
     static std::vector<sstring> prios( { "NONE",
         "NONE:+CURVE-SECP256R1"
     });
@@ -359,6 +370,10 @@ SEASTAR_THREAD_TEST_CASE(test_x509_client_with_builder_multiple) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_x509_client_with_priority_strings) {
+    if (!using_gnutls()) {
+        // GnuTLS priority strings are not applicable to OpenSSL
+        return;
+    }
     static std::vector<sstring> prios( {
         "NORMAL:+ARCFOUR-128", // means normal ciphers plus ARCFOUR-128.
         "SECURE128:-VERS-SSL3.0:+COMP-DEFLATE", // means that only secure ciphers are enabled, SSL3.0 is disabled, and libz compression enabled.
@@ -381,6 +396,10 @@ SEASTAR_THREAD_TEST_CASE(test_x509_client_with_priority_strings) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_x509_client_with_priority_strings_fail) {
+    if (!using_gnutls()) {
+        // GnuTLS priority strings are not applicable to OpenSSL
+        return;
+    }
     static std::vector<sstring> prios( { "NONE",
         "NONE:+CURVE-SECP256R1"
     });
@@ -714,7 +733,6 @@ SEASTAR_TEST_CASE(test_simple_x509_client_server_again) {
     return run_echo_test(message, 20, certfile("catest.pem"), "test.scylladb.org");
 }
 
-#if GNUTLS_VERSION_NUMBER >= 0x030600
 // Test #769 - do not set dh_params in server certs - let gnutls negotiate.
 SEASTAR_TEST_CASE(test_simple_server_default_dhparams) {
     return run_echo_test(message, 20, certfile("catest.pem"), "test.scylladb.org",
@@ -722,7 +740,6 @@ SEASTAR_TEST_CASE(test_simple_server_default_dhparams) {
         {}, {}, true, /* use_dh_params */ false
     );
 }
-#endif
 
 SEASTAR_TEST_CASE(test_x509_client_server_cert_validation_fail) {
     // Load a real trust authority here, which our certs are _not_ signed with.
@@ -1560,10 +1577,16 @@ SEASTAR_THREAD_TEST_CASE(test_peer_certificate_chain_handling) {
             return contents;
         };
 
-        auto ders = {read_file(certfile("test.crt.der"))};
+        auto expected_leaf = read_file(certfile("test.crt.der"));
 
-        BOOST_REQUIRE(std::ranges::equal(scrts, ders));
-        BOOST_REQUIRE(std::ranges::equal(ccrts, ders));
+        // The chain must contain at least the peer's leaf certificate.
+        // OpenSSL may also include additional chain certs (e.g. CA)
+        // via auto-chain, while GnuTLS only sends what was explicitly
+        // provided in the key file.
+        BOOST_REQUIRE(!scrts.empty());
+        BOOST_REQUIRE(scrts.front() == expected_leaf);
+        BOOST_REQUIRE(!ccrts.empty());
+        BOOST_REQUIRE(ccrts.front() == expected_leaf);
     }
 }
 

@@ -44,6 +44,7 @@ debian_packages=(
     libpciaccess-dev
     libprotobuf-dev
     libsctp-dev
+    libssl-dev
     libtool
     liburing-dev
     libxml2-dev
@@ -95,7 +96,7 @@ redhat_packages=(
     make
     meson
     numactl-devel
-    openssl
+    openssl-devel
     protobuf-compiler
     protobuf-devel
     python3

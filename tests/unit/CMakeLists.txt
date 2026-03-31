@@ -656,7 +656,7 @@ function(seastar_add_certgen name)
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
   )
   add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${CERT_CAROOT}"
-    COMMAND ${OPENSSL} req -x509 -new -nodes -key ${CERT_CAPRIVKEY} -days ${CERT_DAYS} -config ${CERT_NAME}.cfg -out ${CERT_CAROOT}
+    COMMAND ${OPENSSL} req -x509 -new -nodes -key ${CERT_CAPRIVKEY} -days ${CERT_DAYS} -config ${CERT_NAME}.cfg -extensions v3_ca -out ${CERT_CAROOT}
     DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/${CERT_CAPRIVKEY}" "${CMAKE_CURRENT_BINARY_DIR}/${CERT_NAME}.cfg"
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
   )
@@ -750,7 +750,7 @@ function(seastar_gen_mtls_certs)
   seastar_sign_cert("mtls_server"
     CA ${cert_ca}
     SERIAL_NUM 1
-    COMMON_NAME "redpanda.com")
+    COMMON_NAME "server.redpanda.com")
   # client1 certificates
   seastar_sign_cert("mtls_client1"
     CA ${cert_ca}
@@ -807,6 +807,18 @@ seastar_add_test (tls
   SOURCES tls_test.cc
   LIBRARIES Boost::filesystem
   WORKING_DIRECTORY ${Seastar_BINARY_DIR})
+
+# the `tls` test above runs with the default crypto provider, which by
+# convention is GnuTLS, if is available. When both GnuTLS and OpenSSL are
+# available this test provides coverage for the OpenSSL provider. This reuses
+# the tls_test binary built above via CUSTOM to avoid compiling it twice.
+if (Seastar_OPENSSL AND Seastar_GNUTLS)
+  seastar_add_test (tls_openssl
+    KIND CUSTOM
+    WORKING_DIRECTORY ${Seastar_BINARY_DIR}
+    RUN_ARGS $<TARGET_FILE:test_unit_tls> -- -c ${Seastar_UNIT_TEST_SMP} --crypto-provider openssl)
+  add_dependencies (test_unit_tls_openssl_run test_unit_tls tls_files testcrt othercrt mtls_certs https_server)
+endif ()
 
 seastar_add_test (tuple_utils
   KIND BOOST

@@ -525,6 +525,13 @@ seastar_generate_protobuf (
   IN_FILE ${CMAKE_CURRENT_SOURCE_DIR}/src/proto/metrics2.proto
   OUT_DIR ${Seastar_GEN_BINARY_DIR}/src/proto)
 
+set_option_if_package_is_found (Seastar_GNUTLS GnuTLS)
+set_option_if_package_is_found (Seastar_OPENSSL OpenSSL)
+
+if (NOT Seastar_GNUTLS AND NOT Seastar_OPENSSL)
+  message (FATAL_ERROR "At least one TLS/crypto backend is required. Install GnuTLS or OpenSSL development packages.")
+endif ()
+
 add_library (seastar
   ${http_chunk_parsers_file}
   ${http_request_parser_file}
@@ -641,6 +648,7 @@ add_library (seastar
   include/seastar/http/short_streams.hh
   include/seastar/http/transformers.hh
   include/seastar/http/client.hh
+  include/seastar/core/internal/md5.hh
   include/seastar/json/formatter.hh
   include/seastar/json/json_elements.hh
   include/seastar/net/api.hh
@@ -746,6 +754,7 @@ add_library (seastar
   src/core/io_queue.cc
   src/core/semaphore.cc
   src/core/condition-variable.cc
+  src/core/crypto.cc
   src/http/api_docs.cc
   src/http/common.cc
   src/http/file_handler.cc
@@ -780,7 +789,7 @@ add_library (seastar
   src/net/socket_address.cc
   src/net/stack.cc
   src/net/tcp.cc
-  src/net/tls.cc
+  src/net/tls-impl.cc
   src/net/udp.cc
   src/net/unix_address.cc
   src/net/virtio.cc
@@ -803,6 +812,22 @@ add_library (seastar
   src/websocket/client.cc
   src/websocket/server.cc
   )
+
+if (Seastar_GNUTLS)
+  target_sources(seastar
+    PRIVATE
+      src/net/tls_gnutls.cc
+      src/core/crypto_gnutls.cc
+  )
+endif ()
+
+if (Seastar_OPENSSL)
+  target_sources(seastar
+    PRIVATE
+      src/net/tls_openssl.cc
+      src/core/crypto_openssl.cc
+  )
+endif ()
 
 if (Seastar_MODULE)
   target_sources(seastar
@@ -887,7 +912,6 @@ target_link_libraries (seastar
     lz4::lz4
   PRIVATE
     ${CMAKE_DL_LIBS}
-    GnuTLS::gnutls
     StdAtomic::atomic
     lksctp-tools::lksctp-tools
     protobuf::libprotobuf
@@ -1088,6 +1112,24 @@ if (Seastar_HWLOC)
 
   target_link_libraries (seastar
     PRIVATE hwloc::hwloc)
+endif ()
+
+if (Seastar_GNUTLS)
+  if (NOT GnuTLS_FOUND)
+    message (FATAL_ERROR "Seastar_GNUTLS is enabled but GnuTLS was not found!")
+  endif ()
+  list (APPEND Seastar_PRIVATE_COMPILE_DEFINITIONS SEASTAR_HAVE_GNUTLS)
+  target_link_libraries (seastar
+    PRIVATE GnuTLS::gnutls)
+endif ()
+
+if (Seastar_OPENSSL)
+  if (NOT OpenSSL_FOUND)
+    message (FATAL_ERROR "Seastar_OPENSSL is enabled but OpenSSL was not found!")
+  endif ()
+  list (APPEND Seastar_PRIVATE_COMPILE_DEFINITIONS SEASTAR_HAVE_OPENSSL)
+  target_link_libraries (seastar
+    PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 endif ()
 
 set_option_if_package_is_found (Seastar_IO_URING LibUring)

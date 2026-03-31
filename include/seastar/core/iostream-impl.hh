@@ -24,6 +24,7 @@
 #pragma once
 
 #include <numeric>
+#include <stdexcept>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/do_with.hh>
 #include <seastar/core/loop.hh>
@@ -37,16 +38,19 @@ inline future<temporary_buffer<char>> data_source_impl::skip(uint64_t n)
 {
     return do_with(uint64_t(n), [this] (uint64_t& n) {
         return repeat_until_value([&] {
-            return get().then([&] (temporary_buffer<char> buffer) -> std::optional<temporary_buffer<char>> {
+            return get().then([&] (temporary_buffer<char> buffer)
+                    -> future<std::optional<temporary_buffer<char>>> {
+                using opt_buf = std::optional<temporary_buffer<char>>;
                 if (buffer.empty()) {
-                    return buffer;
+                    return make_exception_future<opt_buf>(
+                            std::runtime_error("premature end of stream"));
                 }
                 if (buffer.size() >= n) {
                     buffer.trim_front(n);
-                    return buffer;
+                    return make_ready_future<opt_buf>(std::move(buffer));
                 }
                 n -= buffer.size();
-                return { };
+                return make_ready_future<opt_buf>(std::nullopt);
             });
         });
     });
@@ -207,7 +211,10 @@ input_stream<CharType>::read_exactly(size_t n) noexcept {
         _buf.trim_front(n);
         return make_ready_future<tmp_buf>(std::move(front));
     } else if (_buf.size() == 0) {
-        // buffer is empty: grab one and retry
+        // buffer is empty: if already at EOF return empty, otherwise grab one and retry
+        if (_eof) {
+            return make_ready_future<tmp_buf>();
+        }
         return _fd.get().then([this, n] (auto buf) mutable {
             if (buf.size() == 0) {
                 _eof = true;
@@ -320,6 +327,9 @@ input_stream<CharType>::skip(uint64_t n) noexcept {
     n -= skip_buf;
     if (!n) {
         return make_ready_future<>();
+    }
+    if (_eof) {
+        return make_exception_future<>(std::runtime_error("premature end of stream"));
     }
     return _fd.skip(n).then([this] (temporary_buffer<CharType> buffer) {
         _buf = std::move(buffer);

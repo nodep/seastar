@@ -450,6 +450,9 @@ seastar_add_test (noncopyable_function
   KIND BOOST
   SOURCES noncopyable_function_test.cc)
 
+seastar_add_test (input_stream
+  SOURCES input_stream_test.cc)
+
 seastar_add_test (output_stream
   SOURCES
     output_stream_test.cc

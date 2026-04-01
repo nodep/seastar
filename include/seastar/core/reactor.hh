@@ -466,6 +466,9 @@ private:
     future<size_t>
     do_sendmsg(pollable_fd_state& fd, std::span<iovec> iovs, size_t len);
 
+    future<size_t>
+    do_writev(pollable_fd_state& fd, std::span<iovec> iovs);
+
     future<temporary_buffer<char>>
     do_recv_some(pollable_fd_state& fd, internal::buffer_allocator* ba);
 

@@ -376,6 +376,20 @@ reactor::do_sendmsg(pollable_fd_state& fd, std::span<iovec> iovs, size_t len) {
     });
 }
 
+future<size_t>
+reactor::do_writev(pollable_fd_state& fd, std::span<iovec> iovs) {
+    return writeable(fd).then([this, &fd, iovs] () mutable {
+        auto r = fd.fd.writev(iovs.data(), std::min<size_t>(iovs.size(), IOV_MAX));
+        if (!r) {
+            return do_writev(fd, iovs);
+        }
+        if (size_t(*r) == internal::iovec_len(iovs)) {
+            fd.speculate_epoll(EPOLLOUT);
+        }
+        return make_ready_future<size_t>(*r);
+    });
+}
+
 #if SEASTAR_API_LEVEL < 9
 future<>
 reactor::send_all_part(pollable_fd_state& fd, const void* buffer, size_t len, size_t completed) {
@@ -434,6 +448,10 @@ future<temporary_buffer<char>> pollable_fd_state::read_some(internal::buffer_all
 future<size_t> pollable_fd_state::send_some(std::span<iovec> iovs) {
     return engine()._backend->sendmsg(*this, iovs, internal::iovec_len(iovs));
 }
+
+future<size_t> pollable_fd_state::write_some(std::span<iovec> iovs) {
+    return engine()._backend->writev(*this, iovs);
+}
 #else
 future<size_t> pollable_fd_state::write_some(net::packet& p) {
     static_assert(offsetof(iovec, iov_base) == offsetof(net::fragment, base) &&
@@ -455,6 +473,13 @@ future<> pollable_fd_state::send_all(std::span<iovec> iovs) {
     return send_some(iovs).then([this, iovs] (size_t size) {
         auto niovs = internal::iovec_trim_front(iovs, size);
         return niovs.empty() ? make_ready_future<>() : send_all(niovs);
+    });
+}
+
+future<> pollable_fd_state::write_all(std::span<iovec> iovs) {
+    return write_some(iovs).then([this, iovs] (size_t size) {
+        auto niovs = internal::iovec_trim_front(iovs, size);
+        return niovs.empty() ? make_ready_future<>() : write_all(niovs);
     });
 }
 #else

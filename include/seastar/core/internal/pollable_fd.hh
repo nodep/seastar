@@ -223,6 +223,7 @@ public:
         return _s->poll_rdhup();
     }
     int get_fd() const { return _s->fd.get(); }
+    void speculate_epoll(int events) { _s->speculate_epoll(events); }
 
 protected:
     void maybe_no_more_recv() { return _s->maybe_no_more_recv(); }

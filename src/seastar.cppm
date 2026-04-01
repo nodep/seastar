@@ -383,6 +383,8 @@ using seastar::file_size;
 using seastar::fs_avail;
 using seastar::make_file_input_stream;
 using seastar::make_file_output_stream;
+using seastar::make_pipe_input_stream;
+using seastar::make_pipe_output_stream;
 using seastar::with_file;
 using seastar::with_file_close_on_failure;
 using seastar::copy;

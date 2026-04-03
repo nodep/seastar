@@ -99,7 +99,9 @@ public:
     future<size_t> read_some(const std::vector<iovec>& iov);
     future<temporary_buffer<char>> read_some(internal::buffer_allocator* ba);
 #if SEASTAR_API_LEVEL >= 9
+    future<size_t> send_some(std::span<iovec> iovs);
     future<size_t> write_some(std::span<iovec> iovs);
+    future<> send_all(std::span<iovec> iovs);
     future<> write_all(std::span<iovec> iovs);
 #else
     future<size_t> write_some(net::packet& p);
@@ -157,8 +159,14 @@ public:
         return _s->read_some(ba);
     }
 #if SEASTAR_API_LEVEL >= 9
+    future<size_t> send_some(std::span<iovec> iov) {
+        return _s->send_some(iov);
+    }
     future<size_t> write_some(std::span<iovec> iov) {
         return _s->write_some(iov);
+    }
+    future<> send_all(std::span<iovec> iov) {
+        return _s->send_all(iov);
     }
     future<> write_all(std::span<iovec> iov) {
         return _s->write_all(iov);
@@ -215,6 +223,7 @@ public:
         return _s->poll_rdhup();
     }
     int get_fd() const { return _s->fd.get(); }
+    void speculate_epoll(int events) { _s->speculate_epoll(events); }
 
 protected:
     void maybe_no_more_recv() { return _s->maybe_no_more_recv(); }

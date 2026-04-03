@@ -466,6 +466,9 @@ private:
     future<size_t>
     do_sendmsg(pollable_fd_state& fd, std::span<iovec> iovs, size_t len);
 
+    future<size_t>
+    do_writev(pollable_fd_state& fd, std::span<iovec> iovs);
+
     future<temporary_buffer<char>>
     do_recv_some(pollable_fd_state& fd, internal::buffer_allocator* ba);
 
@@ -718,6 +721,7 @@ private:
     friend class pollable_fd_state;
     friend class posix_file_impl;
     friend class blockdev_file_impl;
+    friend class pipe_data_source_impl;
     friend class timer<>;
     friend class timer<lowres_clock>;
     friend class timer<manual_clock>;

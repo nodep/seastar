@@ -689,6 +689,11 @@ reactor_backend_aio::sendmsg(pollable_fd_state& fd, std::span<iovec> iovs, size_
     return _r.do_sendmsg(fd, iovs, len);
 }
 
+future<size_t>
+reactor_backend_aio::writev(pollable_fd_state& fd, std::span<iovec> iovs) {
+    return _r.do_writev(fd, iovs);
+}
+
 future<temporary_buffer<char>>
 reactor_backend_aio::recv_some(pollable_fd_state& fd, internal::buffer_allocator* ba) {
     return _r.do_recv_some(fd, ba);
@@ -1085,6 +1090,11 @@ reactor_backend_epoll::send(pollable_fd_state& fd, const void* buffer, size_t le
 future<size_t>
 reactor_backend_epoll::sendmsg(pollable_fd_state& fd, std::span<iovec> iovs, size_t len) {
     return _r.do_sendmsg(fd, iovs, len);
+}
+
+future<size_t>
+reactor_backend_epoll::writev(pollable_fd_state& fd, std::span<iovec> iovs) {
+    return _r.do_writev(fd, iovs);
 }
 
 future<temporary_buffer<char>>
@@ -1768,6 +1778,10 @@ public:
         auto desc = std::make_unique<write_completion>(fd, iovs, len);
         auto req = internal::io_request::make_sendmsg(fd.fd.get(), desc->msghdr(), MSG_NOSIGNAL);
         return submit_request(std::move(desc), std::move(req));
+    }
+
+    virtual future<size_t> writev(pollable_fd_state& fd, std::span<iovec> iovs) override {
+        return _r.do_writev(fd, iovs);
     }
 
 #if SEASTAR_API_LEVEL < 9

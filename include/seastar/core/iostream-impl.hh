@@ -23,6 +23,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <numeric>
 #include <stdexcept>
 #include <seastar/core/coroutine.hh>
@@ -322,7 +323,7 @@ input_stream<CharType>::read() noexcept {
 template <typename CharType>
 future<>
 input_stream<CharType>::skip(uint64_t n) noexcept {
-    auto skip_buf = std::min(n, _buf.size());
+    auto skip_buf = std::min(static_cast<size_t>(n), _buf.size());
     _buf.trim_front(skip_buf);
     n -= skip_buf;
     if (!n) {

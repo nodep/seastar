@@ -369,6 +369,17 @@ posix_file_impl::allocate(uint64_t position, uint64_t length) noexcept {
 #endif
 }
 
+future<file_mapping>
+posix_file_impl::mmap(size_t length, mmap_prot prot, mmap_private priv, size_t offset) noexcept {
+    auto sr = co_await engine()._thread_pool->submit<syscall_result<void*>>(
+            internal::thread_pool_submit_reason::file_operation, [fd = _fd, length, prot, priv, offset] {
+        int flags = bool(priv) ? MAP_PRIVATE : MAP_SHARED;
+        return wrap_syscall<void*>(::mmap(nullptr, length, static_cast<int>(prot), flags, fd, offset));
+    });
+    sr.throw_if_error();
+    co_return file_mapping{sr.result, length};
+}
+
 future<uint64_t>
 posix_file_impl::size() noexcept {
     auto r = ::lseek(_fd, 0, SEEK_END);
@@ -1095,6 +1106,36 @@ posix_file_handle_impl<FileImpl>::to_file() && {
     return ret;
 }
 
+file_mapping::~file_mapping() noexcept {
+    if (_addr || _length) {
+        seastar_logger.warn("file_mapping destroyed without unmap(); falling back to blocking ::munmap (reactor stall), contact support");
+        ::munmap(_addr, _length);
+    }
+}
+
+future<> file_mapping::unmap() noexcept {
+    void* addr = std::exchange(_addr, nullptr);
+    size_t length = std::exchange(_length, 0);
+    if (!addr) {
+        seastar_logger.warn("double unmap() detected, contact support");
+        co_return;
+    }
+
+    auto sr = co_await engine()._thread_pool->submit<syscall_result<int>>(
+            internal::thread_pool_submit_reason::file_operation, [addr, length] {
+        return wrap_syscall<int>(::munmap(addr, length));
+    });
+    sr.throw_if_error();
+}
+
+future<> file_mapping::flush() noexcept {
+    auto sr = co_await engine()._thread_pool->submit<syscall_result<int>>(
+            internal::thread_pool_submit_reason::file_operation, [addr = _addr, length = _length] {
+        return wrap_syscall<int>(::msync(addr, length, MS_SYNC));
+    });
+    sr.throw_if_error();
+}
+
 // Some kernels can append to xfs filesystems, some cannot; determine
 // from kernel version.
 static
@@ -1424,6 +1465,10 @@ future<> file::allocate(uint64_t position, uint64_t length) noexcept {
   }
 }
 
+future<file_mapping> file::mmap(size_t length, mmap_prot prot, mmap_private priv, size_t offset) noexcept {
+    return _file_impl->mmap(length, prot, priv, offset);
+}
+
 future<> file::truncate(uint64_t length) noexcept {
   try {
     return _file_impl->truncate(length);
@@ -1571,6 +1616,10 @@ future<int> file_impl::fcntl_short(int op, uintptr_t arg) noexcept {
 
 future<struct stat> file_impl::statat(std::string_view name, int flags) {
     return make_exception_future<struct stat>(std::runtime_error("this file type does not support statat"));
+}
+
+future<file_mapping> file_impl::mmap(size_t length, mmap_prot prot, mmap_private priv, size_t offset) noexcept {
+    return make_exception_future<file_mapping>(std::runtime_error("this file type does not support mmap"));
 }
 
 future<file> open_file_dma(std::string_view name, open_flags flags) noexcept {

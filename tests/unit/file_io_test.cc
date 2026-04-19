@@ -153,6 +153,29 @@ SEASTAR_TEST_CASE(file_rw_dup_test) {
     });
 }
 
+SEASTAR_TEST_CASE(file_mmap_test) {
+    return tmp_dir::do_with([] (tmp_dir& t) -> future<> {
+        sstring filename = (t.get_path() / "testfile.tmp").native();
+        auto f = co_await open_file_dma(filename, open_flags::rw | open_flags::create);
+        co_await f.truncate(4096);
+        auto map = co_await f.mmap(4096, mmap_prot::read | mmap_prot::write, mmap_private::no, 0);
+        BOOST_CHECK_EQUAL(map.size(), 4096);
+        // Write null-terminated string to the map.
+        std::string_view str = "Hello, mmap!";
+        std::memcpy(map.get(), str.data(), str.size() + 1);
+        std::string_view map_str{reinterpret_cast<const char*>(map.get()), str.size()};
+        BOOST_CHECK_EQUAL(map_str, str);
+        co_await map.flush();
+        co_await map.unmap();
+        // Read the string back through the file, using dma_read.
+        auto buf = allocate_aligned_buffer<char>(4096, 4096);
+        co_await f.dma_read(0, buf.get(), 4096);
+        std::string_view buf_str{buf.get(), str.size()};
+        BOOST_CHECK_EQUAL(buf_str, str);
+        co_await f.close();
+    });
+}
+
 struct file_test {
     file_test(file&& f) : f(std::move(f)) {}
     file f;

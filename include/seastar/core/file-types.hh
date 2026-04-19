@@ -22,8 +22,11 @@
 #pragma once
 
 #include <fcntl.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <type_traits>
+
+#include <seastar/util/bool_class.hh>
 
 namespace seastar {
 
@@ -160,6 +163,37 @@ inline constexpr file_permissions operator|(file_permissions a, file_permissions
 inline constexpr file_permissions operator&(file_permissions a, file_permissions b) {
     return file_permissions(std::underlying_type_t<file_permissions>(a) & std::underlying_type_t<file_permissions>(b));
 }
+
+/// \brief Memory protection flags for mmap.
+///
+/// \see file::mmap()
+enum class mmap_prot {
+    none = PROT_NONE,
+    read = PROT_READ,
+    write = PROT_WRITE,
+    execute = PROT_EXEC,
+};
+
+inline constexpr mmap_prot operator|(mmap_prot a, mmap_prot b) {
+    return mmap_prot(std::underlying_type_t<mmap_prot>(a) | std::underlying_type_t<mmap_prot>(b));
+}
+
+inline void operator|=(mmap_prot& a, mmap_prot b) {
+    a = (a | b);
+}
+
+inline constexpr mmap_prot operator&(mmap_prot a, mmap_prot b) {
+    return mmap_prot(std::underlying_type_t<mmap_prot>(a) & std::underlying_type_t<mmap_prot>(b));
+}
+
+inline void operator&=(mmap_prot& a, mmap_prot b) {
+    a = (a & b);
+}
+
+/// \brief Visibility flag for mmap (`MAP_PRIVATE` when true, `MAP_SHARED` when false).
+///
+/// \see file::mmap()
+using mmap_private = bool_class<struct mmap_private_tag>;
 
 /// @}
 

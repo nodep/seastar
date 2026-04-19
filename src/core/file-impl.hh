@@ -107,6 +107,7 @@ public:
     future<int> fcntl(int op, uintptr_t arg) noexcept override;
     future<int> fcntl_short(int op, uintptr_t arg) noexcept override;
     virtual future<> allocate(uint64_t position, uint64_t length) noexcept override;
+    future<file_mapping> mmap(size_t length, mmap_prot prot, mmap_private priv, size_t offset) noexcept override;
     future<uint64_t> size() noexcept override;
     // close() never fails. It just reports errors and swallows them.
     // The user must call flush() first if they care aout stable storage semantics.

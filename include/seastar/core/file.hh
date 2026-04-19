@@ -115,6 +115,87 @@ class file_handle;
 class file_data_sink_impl;
 class file_data_source_impl;
 
+/// \brief A memory mapped region of a file.
+///
+/// Represents a memory region created by \ref seastar::file::mmap().
+///
+/// \warning This API is strongly discouraged for general-purpose file I/O.
+/// Accessing file-backed memory mappings relies on the kernel page cache and
+/// can trigger major page faults. These faults will silently block the
+/// Seastar reactor thread, bypassing Seastar's I/O scheduler and severely
+/// degrading overall system performance. Seastar applications should prefer
+/// \c O_DIRECT DMA interfaces (e.g., \ref dma_read) for persistent storage.
+///
+/// This facility is provided specifically for shared memory use cases (e.g.,
+/// mapping files on \c tmpfs or \c shm), where data resides entirely in RAM
+/// and blocking disk I/O is not a concern.
+///
+/// Because \c munmap requires acquiring kernel \c mmap_sem locks, it cannot
+/// be executed synchronously in a destructor without risking blocking the reactor.
+/// Therefore, the user must explicitly await the asynchronous \ref unmap()
+/// method before this object is destroyed.
+class file_mapping {
+    void* _addr = nullptr;
+    size_t _length = 0;
+
+    file_mapping(void* addr, size_t length) noexcept
+        : _addr(addr), _length(length) {}
+
+    friend class posix_file_impl;
+
+public:
+    /// Constructs an uninitialized file mapping.
+    file_mapping() noexcept = default;
+    file_mapping(const file_mapping&) = delete;
+    file_mapping& operator=(const file_mapping&) = delete;
+
+    file_mapping(file_mapping&& other) noexcept
+        : _addr(std::exchange(other._addr, nullptr))
+        , _length(std::exchange(other._length, 0)) {}
+
+    file_mapping& operator=(file_mapping&& other) noexcept {
+        if (this != &other) {
+            SEASTAR_ASSERT(!_addr && !_length && "file_mapping assigned to without unmapping");
+            _addr = std::exchange(other._addr, nullptr);
+            _length = std::exchange(other._length, 0);
+        }
+        return *this;
+    }
+
+    ~file_mapping() noexcept;
+
+    /// Returns the address of the memory mapped region.
+    void* get() const noexcept { return _addr; }
+
+    /// Returns the size of the memory mapped region.
+    size_t size() const noexcept { return _length; }
+
+    /// Unmaps the file mapping asynchronously.
+    ///
+    /// This must be called exactly once before the object is destroyed.
+    /// \post The file mapping is unmapped and the object is in an uninitialized
+    /// state (i.e. \ref get() returns nullptr and \ref size() returns 0).
+    future<> unmap() noexcept;
+
+    /// Flushes changes made to the in-core copy of a file that was mapped into
+    /// memory using \c mmap(2) back to the filesystem by calling \c msync(2).
+    ///
+    /// This method is executed asynchronously on the reactor's thread pool, as
+    /// \c msync blocks until the dirty pages are written to the underlying storage.
+    ///
+    /// \note For the primary use case of this class (shared memory via \c tmpfs
+    /// or \c shm), calling \ref flush() is strictly unnecessary as the data resides
+    /// entirely in RAM.
+    ///
+    /// This method is provided primarily for testing or rare edge cases where
+    /// mapped memory access is mixed with Seastar's \c O_DIRECT I/O. Because
+    /// \ref dma_read() bypasses the kernel page cache, dirty mapped pages must
+    /// be explicitly synced to the backing device before a DMA read will see
+    /// the modifications. Doing this on persistent storage in production is
+    /// strongly discouraged.
+    future<> flush() noexcept;
+};
+
 // The directory_entry size is 24 bytes (as the file name is allocated separately)
 // so the circular buffer is tuned to hold 16 entries
 constexpr size_t list_directory_generator_buffer_size = calc_circular_buffer_capacity<directory_entry, 512>();
@@ -159,6 +240,7 @@ public:
     virtual future<int> fcntl(int op, uintptr_t arg) noexcept;
     virtual future<int> fcntl_short(int op, uintptr_t arg) noexcept;
     virtual future<> allocate(uint64_t position, uint64_t length) = 0;
+    virtual future<file_mapping> mmap(size_t length, mmap_prot prot, mmap_private priv, size_t offset) noexcept;
     virtual future<uint64_t> size() = 0;
     virtual future<> close() = 0;
     virtual std::unique_ptr<file_handle_impl> dup();
@@ -420,6 +502,23 @@ public:
     /// The discard operation tells the file system that a range of offsets
     /// (which be aligned) is no longer needed and can be reused.
     future<> discard(uint64_t offset, uint64_t length) noexcept;
+
+    /// Maps a portion of the file into memory.
+    ///
+    /// Asynchronously maps the file into memory using the \c mmap syscall.
+    /// Because \c mmap can block on kernel memory management semaphores,
+    /// the syscall is submitted to the reactor's background thread pool.
+    ///
+    /// \note This method is intended strictly for shared memory applications
+    /// (e.g., \c tmpfs). Using it for standard disk I/O will result in page
+    /// faults that block the reactor thread.
+    ///
+    /// \param length the size of the mapping
+    /// \param prot the memory protection flags (e.g., `PROT_READ | PROT_WRITE`)
+    /// \param priv the visibility of the mapping (`MAP_PRIVATE` when true, `MAP_SHARED` when false)
+    /// \param offset the offset in the file to start mapping from (must be page-aligned)
+    /// \return a future containing a \ref file_mapping object.
+    future<file_mapping> mmap(size_t length, mmap_prot prot, mmap_private priv, size_t offset) noexcept;
 
     /// Generic ioctl syscall support for special file handling.
     ///

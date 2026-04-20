@@ -369,6 +369,29 @@ public:
     virtual ~job() {}
 };
 
+static inline void emit_throughput(YAML::Emitter& out, uint64_t total_messages, uint64_t message_size, std::chrono::duration<double> total_duration) {
+    uint64_t total_bytes = (UINT64_MAX / message_size < total_messages) ? UINT64_MAX : total_messages * message_size;
+    out << YAML::Key << "total bytes" << YAML::Value << total_bytes << YAML::Comment("B");
+    out << YAML::Key << "message size" << YAML::Value << message_size << YAML::Comment("B");
+    if (total_duration.count() > 0) {
+        double throughput = total_bytes / total_duration.count();
+        out << YAML::Key << "throughput" << YAML::Value << throughput << YAML::Comment("B/s");
+    } else {
+        out << YAML::Key << "throughput" << YAML::Value << "inf" << YAML::Comment("B/s");
+    }
+}
+
+static inline void emit_messages(YAML::Emitter& out, uint64_t total_messages, std::chrono::duration<double> total_duration) {
+    out << YAML::Key << "messages" << YAML::Value << total_messages;
+    out << YAML::Key << "total duration" << YAML::Value << total_duration.count() << YAML::Comment("s");
+    if (total_duration.count() > 0) {
+        double messages_per_sec = total_messages / total_duration.count();
+        out << YAML::Key << "messages per second" << YAML::Value << messages_per_sec;
+    } else {
+        out << YAML::Key << "messages per second" << YAML::Value << "inf";
+    }
+}
+
 class job_rpc : public job {
     using accumulator_type = accumulator_set<double, stats<tag::extended_p_square_quantile(quadratic), tag::mean, tag::max>>;
 
@@ -381,6 +404,8 @@ class job_rpc : public job {
     std::chrono::steady_clock::time_point _stop;
     uint64_t _total_messages = 0;
     accumulator_type _latencies;
+    std::chrono::steady_clock::time_point _start_time{};
+    std::chrono::duration<double> _total_duration{0.0};
 
     future<> call_echo(unsigned dummy) {
         auto cln = _rpc.make_client<uint64_t(uint64_t)>(rpc_verb::ECHO);
@@ -434,6 +459,7 @@ public:
         rpc::client_options co;
         co.tcp_nodelay = _ccfg.nodelay;
         co.isolation_cookie = _cfg.sg_name;
+        _start_time = std::chrono::steady_clock::now();
         _client = std::make_unique<rpc_protocol::client>(_rpc, co, _caddr);
         return parallel_for_each(std::views::iota(0u, _cfg.parallelism), [this] (auto dummy) {
           auto f = make_ready_future<>();
@@ -460,13 +486,17 @@ public:
             });
           });
         }).finally([this] {
+            _total_duration = std::chrono::steady_clock::now() - _start_time;
             return _client->stop();
         });
       });
     }
 
     virtual void emit_result(YAML::Emitter& out) const override {
-        out << YAML::Key << "messages" << YAML::Value << _total_messages;
+        emit_messages(out, _total_messages, _total_duration);
+        if (_cfg.verb == "write") {
+            emit_throughput(out, _total_messages, _cfg.payload, _total_duration);
+        }
         out << YAML::Key << "latencies" << YAML::Comment("usec");
         out << YAML::BeginMap;
         out << YAML::Key << "average" << YAML::Value << (uint64_t)mean(_latencies);
@@ -487,7 +517,6 @@ class job_rpc_streaming : public job {
     std::function<future<>(unsigned, const payload_t&)> _call;
     std::chrono::steady_clock::time_point _stop;
     uint64_t _total_messages = 0;
-    uint64_t _payload_size_bytes = 0;
     std::chrono::steady_clock::time_point _start_time{};
     std::chrono::duration<double> _total_duration{0.0};
     payload_t _payload;
@@ -499,7 +528,6 @@ public:
             , _ccfg(ccfg)
             , _rpc(rpc)
             , _stop(std::chrono::steady_clock::now() + _cfg.duration)
-            , _payload_size_bytes(_cfg.payload)
             , _payload(_cfg.payload / sizeof(payload_t::value_type), 0) {
         if (_cfg.verb == "bidirectional") {
             _call = [this] (unsigned worker_id, const payload_t& payload) {
@@ -595,19 +623,8 @@ public:
     }
 
     virtual void emit_result(YAML::Emitter& out) const override {
-        out << YAML::Key << "messages" << YAML::Value << _total_messages;
-
-        auto total_bytes = _total_messages * _payload_size_bytes;
-        if (_total_duration.count() > 0) {
-            double throughput = total_bytes / _total_duration.count();
-            out << YAML::Key << "throughput" << YAML::Value << throughput << YAML::Comment("B/s");
-
-            double messages_per_sec = _total_messages / _total_duration.count();
-            out << YAML::Key << "messages per second" << YAML::Value << messages_per_sec;
-        } else {
-            out << YAML::Key << "throughput" << YAML::Value << "inf" << YAML::Comment("kB/s");
-            out << YAML::Key << "messages per second" << YAML::Value << "inf";
-        }
+        emit_throughput(out, _total_messages, _cfg.payload, _total_duration);
+        emit_messages(out, _total_messages, _total_duration);
     }
 
     static future<> process_bi_source(rpc::source<payload_t> source, rpc::sink<payload_t> sink) {

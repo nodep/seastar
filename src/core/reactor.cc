@@ -1883,6 +1883,7 @@ reactor::open_file_dma(std::string_view nameref, open_flags flags, file_open_opt
             internal::thread_pool_submit_reason::file_operation, [this, name, &open_flags, &options, strict_o_direct = _cfg.strict_o_direct, bypass_fsync = _cfg.bypass_fsync] () mutable {
         // We want O_DIRECT, except in three cases:
         //   - tmpfs (which doesn't support it, but works fine anyway)
+        //   - hugetlbfs (which also doesn't support it)
         //   - strict_o_direct == false (where we forgive it being not supported)
         //   - kernel_page_cache == true (where we disable it for short-lived test processes)
         // Because open() with O_DIRECT will fail, we open it without O_DIRECT, try
@@ -1894,7 +1895,7 @@ reactor::open_file_dma(std::string_view nameref, open_flags flags, file_open_opt
             if (r == -1) {
                 return false;
             }
-            return buf.f_type == internal::fs_magic::tmpfs;
+            return buf.f_type == internal::fs_magic::tmpfs || buf.f_type == internal::fs_magic::hugetlbfs;
         };
         open_flags |= O_CLOEXEC;
         if (bypass_fsync) {
@@ -2363,6 +2364,7 @@ reactor::file_system_at(std::string_view pathname_view) noexcept {
         { internal::fs_magic::btrfs, fs_type::btrfs },
         { internal::fs_magic::hfs, fs_type::hfs },
         { internal::fs_magic::tmpfs, fs_type::tmpfs },
+        { internal::fs_magic::hugetlbfs, fs_type::hugetlbfs },
     };
     sr.throw_fs_exception_if_error("statfs failed", pathname);
 

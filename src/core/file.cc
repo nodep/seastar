@@ -1299,6 +1299,7 @@ make_file_impl(int fd, file_open_options options, int flags, struct stat st) noe
                 break;
             case internal::fs_magic::tmpfs:
             case internal::fs_magic::fuse:
+            case internal::fs_magic::hugetlbfs:
                 fsi.append_challenged = false;
                 fsi.append_concurrency = 999;
                 fsi.fsync_is_exclusive = false;

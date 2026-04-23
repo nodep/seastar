@@ -108,6 +108,7 @@ enum class fs_type {
     btrfs,
     hfs,
     tmpfs,
+    hugetlbfs,
 };
 
 // Access flags for files/directories

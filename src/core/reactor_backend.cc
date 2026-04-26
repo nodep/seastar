@@ -1559,7 +1559,7 @@ public:
             void complete(size_t fd) noexcept final {
                 _listenfd.speculate_epoll(EPOLLIN);
                 pollable_fd pfd(file_desc::from_fd(fd), pollable_fd::speculation(EPOLLOUT));
-                _result.set_value(std::move(pfd), std::move(_sa));
+                _result.emplace_value(std::move(pfd), std::move(_sa));
                 delete this;
             }
             void set_exception(std::exception_ptr eptr) noexcept final {
